@@ -19,16 +19,23 @@
     [0, 7, 8, 12, 15],
   ];
   const roleNames = Object.freeze(['lead', 'bass', 'fill']);
-  // How each part moves: a bass repeats its cuts, holds notes and never jumps
-  // an octave up; answering parts start busier and are thinned around the lead.
+  // How each part moves. Drums and bass hold every downbeat; drums open on
+  // the top of their source and never shift octaves (PITCH ENV still bends
+  // them); the lead may push past the downbeat in B; a
+  // bass mostly repeats its cut, holds notes a little longer and only jumps
+  // an octave up on off-beat eighths; answering parts start busier and are
+  // thinned around the lead.
   const roleStyles = Object.freeze({
-    lead: { rhythms, jump: 0.315, stay: 0.26, reverse: 1, rise: true, force: true, density: 1, sustain: 0 },
-    drums: { rhythms, jump: 0.315, stay: 0.26, reverse: 1, rise: true, force: true, density: 1, sustain: 0 },
-    fill: { rhythms, jump: 0.315, stay: 0.26, reverse: 1, rise: true, force: false, density: 1.3, sustain: 0 },
-    bass: { rhythms: bassRhythms, jump: 0.15, stay: 0.55, reverse: 0.5, rise: false, force: true, density: 1, sustain: 2 },
+    lead: { rhythms, jump: 0.315, stay: 0.26, reverse: 1, octaves: 'free', force: true, forceB: false, downbeatB: 0.55, top: false, density: 1, sustain: 0 },
+    drums: { rhythms, jump: 0.315, stay: 0.26, reverse: 1, octaves: 'none', force: true, forceB: true, downbeatB: 1, top: true, density: 1, sustain: 0 },
+    fill: { rhythms, jump: 0.315, stay: 0.26, reverse: 1, octaves: 'free', force: false, forceB: false, downbeatB: 1, top: false, density: 1.3, sustain: 0 },
+    bass: { rhythms: bassRhythms, jump: 0.1, stay: 0.75, reverse: 0.5, octaves: 'bass', force: true, forceB: true, downbeatB: 1, top: false, density: 1, sustain: 1 },
   });
-  const ANSWER_INSIDE = 0.3;
-  const ANSWER_OUTSIDE = 0.85;
+  // Answering parts rarely enter while the lead sounds, sometimes in a beat
+  // where the lead also moves, and freely in beats the lead leaves open.
+  const ANSWER_INSIDE = 0.12;
+  const ANSWER_NEAR = 0.6;
+  const ANSWER_OPEN = 1;
 
   function bounded(value, fallback, min, max) {
     const number = Number(value);
@@ -114,7 +121,9 @@
     const open = list.filter(function (lane) { return !result[lane.id]; });
     const has = function (role) { return list.some(function (lane) { return result[lane.id] === role; }); };
     if (!has('bass')) {
-      const bass = open.find(function (lane) { return roleHint(lane) === 'bass'; });
+      // A low FM phrase knows its notes and chords, so it makes the better bass.
+      const hinted = open.filter(function (lane) { return roleHint(lane) === 'bass'; });
+      const bass = hinted.find(function (lane) { return lane.kind === 'fm'; }) || hinted[0];
       if (bass) result[bass.id] = 'bass';
     }
     if (!has('lead')) {
@@ -126,8 +135,10 @@
     return result;
   }
 
-  function shift(semitones, rise) {
-    return rise || semitones <= 0 ? semitones : 0;
+  function lift(semitones, style, position) {
+    if (style.octaves === 'none') return 0;
+    if (style.octaves !== 'bass') return semitones;
+    return semitones === 12 && position % 4 === 2 ? 12 : 0;
   }
 
   // Sources that know their note boundaries (generated FM phrases) are cut
@@ -207,7 +218,7 @@
     }).concat(ending.events.length ? ending.events : ending.first ? [ending.first] : []);
   }
 
-  function sliceUnit(context, rhythm, from, slice, force) {
+  function sliceUnit(context, rhythm, from, slice, force, downbeat) {
     const settings = context.settings;
     const random = context.random;
     const events = [];
@@ -216,7 +227,7 @@
       if (position < from) return;
       // Beat one and beat three supply an anchor; the other cuts leave more room.
       const anchor = position === 0 || position === 8;
-      const keep = random() < Math.min(1, context.density * (anchor ? 1.25 : 0.92));
+      const keep = random() < Math.min(1, context.density * (anchor ? 1.25 : 0.92) * (position === 0 && downbeat ? downbeat : 1));
       if (random() < context.style.jump) slice = Math.floor(random() * settings.chop);
       else slice = (slice + (random() < context.style.stay ? 0 : 1)) % settings.chop;
       const event = {
@@ -226,7 +237,7 @@
         startRatio: slice / settings.chop,
         sourceChop: settings.chop,
         durationSteps: context.minimumLength + Math.floor(random() * (context.maximumLength - context.minimumLength + 1)) + context.style.sustain,
-        semitones: shift(octave(random, context.octave), context.style.rise),
+        semitones: lift(octave(random, context.octave), context.style, position),
         reverse: random() < context.motion * 0.19 * context.style.reverse,
         velocity: Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3)),
       };
@@ -242,17 +253,20 @@
     const cells = context.style.rhythms;
     const force = context.style.force ? 0 : null;
     const rhythmA = Math.floor(random() * cells.length);
-    const start = Math.floor(random() * chop);
+    const drawn = Math.floor(random() * chop);
+    const start = context.style.top ? 0 : drawn;
     const a = sliceUnit(context, cells[rhythmA], 0, start, force);
+    // Drums open each phrase on the top of their source, usually the downbeat hit.
+    if (context.style.top) a.events = a.events.map(function (event) { return event.step === 0 ? Object.assign({}, event, { sliceIndex: 0, startRatio: 0 }) : event; });
     const answer = sliceUnit(context, cells[otherRhythm(random, rhythmA, cells.length)], ENDING, a.slice, null);
     // B takes another rhythm from the other half of the source.
     const rhythmB = otherRhythm(random, rhythmA, cells.length);
-    const b = sliceUnit(context, cells[rhythmB], 0, (start + Math.floor(chop / 2)) % chop, force);
+    const b = sliceUnit(context, cells[rhythmB], 0, (start + Math.floor(chop / 2)) % chop, context.style.forceB ? 0 : null, context.style.downbeatB);
     const turn = sliceUnit(context, cells[otherRhythm(random, rhythmB, cells.length)], ENDING, b.slice, null);
     return { A: a.events, A2: withEnding(a.events, answer), B: b.events, B2: withEnding(b.events, turn) };
   }
 
-  function noteUnit(context, rhythm, from, state, force, avoidBar) {
+  function noteUnit(context, rhythm, from, state, force, avoidBar, downbeat) {
     const random = context.random;
     const plan = context.plan;
     const events = [];
@@ -261,12 +275,12 @@
       if (position < from) return;
       const anchor = position === 0 || position === 8;
       // Draw everything first so OCTAVE and MOTION never shift other choices.
-      const keep = random() < Math.min(1, context.density * (anchor ? 1.25 : 0.92));
+      const keep = random() < Math.min(1, context.density * (anchor ? 1.25 : 0.92) * (position === 0 && downbeat ? downbeat : 1));
       const jump = random();
       const pick = random();
       const size = random();
       const again = random();
-      const semitones = shift(octave(random, context.octave), context.style.rise);
+      const semitones = lift(octave(random, context.octave), context.style, position);
       const reverse = random() < context.motion * 0.19 * context.style.reverse;
       const velocity = Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3));
       // A run keeps sounding until its last note ends.
@@ -310,7 +324,7 @@
     // B opens with notes from another bar of the source phrase.
     const rhythmB = otherRhythm(random, rhythmA, cells.length);
     const opening = a.events.length ? Math.floor(context.plan.notes[a.events[0].sliceIndex].step / 16) : null;
-    const b = noteUnit(context, cells[rhythmB], 0, { previous: null, busyUntil: 0 }, force, Number.isInteger(opening) ? opening : null);
+    const b = noteUnit(context, cells[rhythmB], 0, { previous: null, busyUntil: 0 }, context.style.forceB ? 0 : null, Number.isInteger(opening) ? opening : null, context.style.downbeatB);
     const turn = noteUnit(context, cells[otherRhythm(random, rhythmB, cells.length)], ENDING, { previous: lastBefore(b.events), busyUntil: ENDING }, null, null);
     return { A: a.events, A2: withEnding(a.events, answer), B: b.events, B2: withEnding(b.events, turn) };
   }
@@ -320,19 +334,27 @@
   // (or the loop end) closes with a fill, and the next downbeat lands home.
   function phrasePlan(settings, seed) {
     const total = settings.bars * 16;
-    const draw = randomFor(seed, '__phrase-ending__')();
+    const random = randomFor(seed, '__phrase-ending__');
+    const draw = random();
+    // Short breaks breathe for an eighth or a beat; longer ones in whole beats.
     const raw = total * 0.5 * settings.breaks / 100;
-    const rest = raw < 2 ? 0 : Math.min(total / 2, Math.max(4, Math.round(raw / 4) * 4));
+    const rest = Math.min(total / 2, raw < 1.5 ? 0 : raw < 3 ? 2 : raw < 6 ? 4 : Math.round(raw / 4) * 4);
     const span = settings.bars >= 4 ? 32 : 16;
     const ends = [];
     for (let end = span; end <= total; end += span) ends.push(end);
     const fits = ends.filter(function (end) { return end >= rest; });
     const restEnd = rest ? fits[Math.floor(draw * fits.length)] : null;
-    const fills = settings.breaks > 0 ? ends.filter(function (end) { return (end % 64 === 0 || end === total) && end !== restEnd; }) : [];
+    // Loops of four bars or more close each four-bar phrase with one fill:
+    // a drum roll or a lead stutter, both at the end of longer loops.
+    const fills = settings.breaks > 0 && settings.bars >= 4 ? ends.filter(function (end) {
+      return (end % 64 === 0 || end === total) && end !== restEnd;
+    }).map(function (end) {
+      return { end, device: settings.bars >= 8 && end === total ? 'both' : random() < 0.5 ? 'roll' : 'stutter' };
+    }) : [];
     return {
       rest: rest ? { start: restEnd - rest, end: restEnd } : null,
       fills,
-      landings: (restEnd ? [restEnd] : []).concat(fills).map(function (end) { return end % total; }),
+      landings: (restEnd ? [restEnd] : []).concat(fills.map(function (fill) { return fill.end; })).map(function (end) { return end % total; }),
     };
   }
 
@@ -354,26 +376,28 @@
     return Object.assign({}, event, { segmentCount: 1, lengthRatio: (note.end - note.start) / plan.duration });
   }
 
-  function hits(source, start, velocities, semitones) {
-    return velocities.map(function (velocity, index) {
-      return Object.assign(withCut({ laneId: source.laneId, step: start + index }, source), {
-        durationSteps: 1, semitones, reverse: false, velocity,
+  function hits(source, start, offsets, lengths, velocities, semitones) {
+    return offsets.map(function (offset, index) {
+      return Object.assign(withCut({ laneId: source.laneId, step: start + offset }, source), {
+        durationSteps: lengths[index], semitones, reverse: false, velocity: velocities[index],
       });
     });
   }
 
   function shapeEnds(events, role, ends, context, home) {
     let result = events;
-    ends.fills.forEach(function (end) {
-      const start = end - 4;
+    ends.fills.forEach(function (fill) {
+      const start = fill.end - 4;
+      // The featured part takes the last beat; the other of drums and lead
+      // keeps its own; bass and answering parts drop out.
+      if ((role === 'drums' && fill.device === 'stutter') || (role === 'lead' && fill.device === 'roll')) return;
       const earlier = result.filter(function (event) { return event.step < start; });
       const source = earlier.length ? earlier[earlier.length - 1] : home;
-      result = result.filter(function (event) { return event.step < start || event.step >= end; });
+      result = result.filter(function (event) { return event.step < start || event.step >= fill.end; });
       if (!source) return;
-      // Drums roll through the last beat; the lead stutters and leaves the
-      // final sixteenth open; bass and answering parts drop out.
-      if (role === 'drums') result = result.concat(hits(source, start, [0.6, 0.68, 0.78, 0.9], 0));
-      else if (role === 'lead') result = result.concat(hits(firstNote(source, context.plan), start, [0.62, 0.72, 0.84], source.semitones));
+      // Drums roll four rising sixteenths; the lead answers "da, da-da".
+      if (role === 'drums') result = result.concat(hits(source, start, [0, 1, 2, 3], [1, 1, 1, 1], [0.6, 0.68, 0.78, 0.9], 0));
+      else if (role === 'lead') result = result.concat(hits(firstNote(source, context.plan), start, [0, 2, 3], [2, 1, 1], [0.72, 0.84, 0.95], source.semitones));
     });
     if (home && role !== 'fill') {
       ends.landings.forEach(function (step) {
@@ -447,14 +471,16 @@
 
   // An answering part plays sparingly while the lead sounds and freely in
   // its gaps. Draws depend on the unit, so repeated bars answer alike.
-  function answerLead(events, lane, settings, seed, occupancy) {
+  function answerLead(events, lane, settings, seed, part) {
     return events.filter(function (event) {
       const bar = Math.floor(event.step / 16);
       const position = event.step % 16;
       const unit = formUnit(bar, settings.bars);
       const source = position < ENDING ? unit.charAt(0) : unit;
       const draw = randomFor(seed, JSON.stringify([lane.id, 'answer', source, position]))();
-      return draw < (occupancy[event.step] ? ANSWER_INSIDE : ANSWER_OUTSIDE);
+      const beat = event.step - event.step % 4;
+      const moving = part.onsets.slice(beat, beat + 4).some(Boolean);
+      return draw < (part.occupancy[event.step] ? ANSWER_INSIDE : moving ? ANSWER_NEAR : ANSWER_OPEN);
     });
   }
 
@@ -482,7 +508,7 @@
         events.push(Object.assign({}, event, { step: event.step + bar * 16 }));
       });
     }
-    if (role === 'fill' && part.occupancy) events = answerLead(events, lane, settings, seed, part.occupancy);
+    if (role === 'fill' && part.occupancy) events = answerLead(events, lane, settings, seed, part);
     const ends = part && part.ends ? part.ends : phrasePlan(settings, seed);
     events = shapeEnds(events, role, ends, context, home);
     if (part && part.chords) events = followChords(events, context, part.chords, role, ends.landings);
@@ -490,7 +516,7 @@
     // Gate before the next onset, the shared rest and, for parts that drop
     // out, the fill beat, avoiding piled-up cuts.
     const stops = (ends.rest ? [ends.rest.start] : []).concat(role === 'bass' || role === 'fill'
-      ? ends.fills.map(function (end) { return end - 4; }) : []).sort(function (first, second) { return first - second; });
+      ? ends.fills.map(function (fill) { return fill.end - 4; }) : []).sort(function (first, second) { return first - second; });
     events.forEach(function (event, index) {
       const nextStep = index + 1 < events.length ? events[index + 1].step : totalSteps;
       const stop = stops.find(function (step) { return step > event.step; });
@@ -505,18 +531,20 @@
     const parts = roles(list);
     // Leads come first so answering parts can hear where the lead sounds.
     const occupancy = new Uint8Array(params.bars * 16);
+    const onsets = new Uint8Array(params.bars * 16);
     const ends = phrasePlan(params, seed);
     const chords = loopChords(list);
     const byLane = new Map();
     list.filter(function (lane) { return parts[lane.id] === 'lead'; }).forEach(function (lane) {
       const events = generateLane(lane, params, seed, { role: 'lead', ends, chords });
       events.forEach(function (event) {
+        onsets[event.step] = 1;
         for (let step = event.step; step < Math.min(occupancy.length, event.step + event.durationSteps); step += 1) occupancy[step] = 1;
       });
       byLane.set(lane, events);
     });
     list.filter(function (lane) { return parts[lane.id] !== 'lead'; }).forEach(function (lane) {
-      byLane.set(lane, generateLane(lane, params, seed, { role: parts[lane.id], occupancy, ends, chords }));
+      byLane.set(lane, generateLane(lane, params, seed, { role: parts[lane.id], occupancy, onsets, ends, chords }));
     });
     return list.reduce(function (events, lane) { return events.concat(byLane.get(lane)); }, []);
   }

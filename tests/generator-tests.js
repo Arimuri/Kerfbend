@@ -212,7 +212,8 @@
       { id: 'a', name: 'Pad Swell' }, { id: 'b', filename: '808_sub_C1.wav' }, { id: 'c', filename: 'VocalChop_F#min.wav' },
       { id: 'd', kind: 'fm', synthSettings: { octave: 4 } }, { id: 'e', kind: 'fm', synthSettings: { octave: 2 } }
     ]);
-    assert(named.a === 'fill' && named.b === 'bass' && named.c === 'lead' && named.d === 'fill' && named.e === 'fill', 'Names pick one bass and one lead; other parts answer: ' + JSON.stringify(named));
+    assert(named.a === 'fill' && named.b === 'fill' && named.c === 'lead' && named.d === 'fill' && named.e === 'bass', 'Names pick one bass (a low FM phrase first) and one lead; other parts answer: ' + JSON.stringify(named));
+    assert(generator.roles([{ id: 'b', filename: '808_sub_C1.wav' }, { id: 'd', kind: 'fm', synthSettings: { octave: 4 } }]).b === 'bass', 'Without a low FM phrase a named bass plays bass');
     assert(generator.roles([{ id: 'x' }, { id: 'y' }]).x === 'lead' && generator.roles([{ id: 'x' }, { id: 'y' }]).y === 'fill', 'Without hints the first part leads');
     const manual = generator.roles([Object.assign({}, band[0], { role: 'fill' }), Object.assign({}, band[1], { role: 'lead' }), band[2], Object.assign({}, band[3], { role: 'bass' })]);
     assert(manual.vox === 'fill' && manual.pad === 'lead' && manual.low === 'fill' && manual.kit === 'bass', 'Manual roles override names, categories and the automatic picks: ' + JSON.stringify(manual));
@@ -237,7 +238,11 @@
       assert(JSON.stringify(lead) === JSON.stringify(generator.generate([band[0]], bandSettings, seed)) &&
         JSON.stringify(lead) === JSON.stringify(generator.generate([band[0], band[2]], bandSettings, seed).filter(function (event) { return event.laneId === 'vox'; })),
       'Adding or removing other parts never changes the lead: ' + seed);
-      assert(bass.length > 0 && bass.every(function (event) { return event.semitones <= 0; }), 'The bass never jumps an octave up: ' + seed);
+      assert(bass.length > 0 && bass.every(function (event) { return event.semitones === 0 || (event.semitones === 12 && event.step % 4 === 2); }),
+        'The bass never drops an octave and only jumps up on off-beat eighths: ' + seed);
+      const kit = events.filter(function (event) { return event.laneId === 'kit'; });
+      assert(kit.some(function (event) { return event.step === 0 && event.sliceIndex === 0 && event.startRatio === 0; }), 'Drums open the phrase on the top of their source: ' + seed);
+      assert(kit.every(function (event) { return event.semitones === 0; }), 'Drums never shift octaves, even at octave 100: ' + seed);
       const bassCells = [[0, 3, 6, 8, 11, 14], [0, 6, 8, 13], [0, 2, 8, 10, 12], [0, 7, 8, 12, 15]];
       assert([0, 16, 32, 48].every(function (downbeat) { return bass.some(function (event) { return event.step === downbeat; }); }) &&
         bass.every(function (event) { return bassCells.some(function (cell) { return cell.includes(event.step % 16); }); }), 'The bass lands on every downbeat and plays bass cells: ' + seed);
@@ -252,6 +257,7 @@
       return JSON.stringify([event.sliceIndex, event.startRatio, event.sourceChop, event.segmentCount, event.lengthRatio]);
     }
     let fillsSeen = 0;
+    const devices = {};
     let restsSeen = 0;
     let landingsSeen = 0;
     for (let index = 0; index < 16; index += 1) {
@@ -266,32 +272,43 @@
         const own = function (id) { return events.filter(function (event) { return event.laneId === id; }); };
         const label = bars + ' bars / breaks ' + breaks + ' / ' + seed;
         const raw = total * 0.5 * breaks / 100;
-        const restLength = raw < 2 ? 0 : Math.min(total / 2, Math.max(4, Math.round(raw / 4) * 4));
+        const restLength = Math.min(total / 2, raw < 1.5 ? 0 : raw < 3 ? 2 : raw < 6 ? 4 : Math.round(raw / 4) * 4);
         const span = bars >= 4 ? 32 : 16;
         if (breaks === 0) {
           assert(plan.rest === null && plan.fills.length === 0 && plan.landings.length === 0, 'BREAKS 0 keeps a continuous loop without rests or fills: ' + label);
           return;
         }
-        assert(restLength === 0 ? plan.rest === null : plan.rest.end - plan.rest.start === restLength && plan.rest.start % 4 === 0 && plan.rest.end % span === 0,
-          'BREAKS sets a beat-aligned rest that ends on a phrase boundary: ' + label);
+        assert(restLength === 0 ? plan.rest === null : plan.rest.end - plan.rest.start === restLength && plan.rest.start % 2 === 0 && plan.rest.end % span === 0,
+          'BREAKS sets an eighth- or beat-length rest that ends on a phrase boundary: ' + label);
         if (plan.rest) {
           restsSeen += 1;
           assert(events.every(function (event) {
             return event.step + event.durationSteps <= plan.rest.start || event.step >= plan.rest.end;
           }), 'Every part is silent through the shared rest: ' + label);
         }
-        assert(plan.fills.every(function (end) { return (end % 64 === 0 || end === total) && (!plan.rest || end !== plan.rest.end); }), 'Fills close four-bar phrases or the loop, never where the rest ends: ' + label);
-        plan.fills.forEach(function (end) {
+        assert(bars >= 4 || plan.fills.length === 0, 'Loops shorter than four bars never fill: ' + label);
+        assert(plan.fills.every(function (fill) {
+          return (fill.end % 64 === 0 || fill.end === total) && (!plan.rest || fill.end !== plan.rest.end) &&
+            (fill.device === 'both' ? bars >= 8 && fill.end === total : ['roll', 'stutter'].includes(fill.device));
+        }), 'Fills close four-bar phrases with one device, both only at the end of long loops: ' + label);
+        plan.fills.forEach(function (fill) {
+          const end = fill.end;
           if (plan.rest && end > plan.rest.start && end - 4 < plan.rest.end) return;
           fillsSeen += 1;
-          const roll = own('kit').filter(function (event) { return event.step >= end - 4 && event.step < end; });
-          assert(roll.length === 4 && roll.every(function (event, position) {
-            return event.step === end - 4 + position && event.durationSteps === 1 && cutOf(event) === cutOf(roll[0]) && (!position || event.velocity > roll[position - 1].velocity);
-          }), 'Drums roll sixteenths with rising velocity through the fill beat: ' + label);
-          const stutter = own('vox').filter(function (event) { return event.step >= end - 4 && event.step < end; });
-          assert(stutter.length === 3 && stutter.every(function (event, position) {
-            return event.step === end - 4 + position && cutOf(event) === cutOf(stutter[0]) && !event.reverse;
-          }), 'The lead stutters three sixteenths and leaves the last one open: ' + label);
+          devices[fill.device] = (devices[fill.device] || 0) + 1;
+          if (fill.device !== 'stutter') {
+            const roll = own('kit').filter(function (event) { return event.step >= end - 4 && event.step < end; });
+            assert(roll.length === 4 && roll.every(function (event, position) {
+              return event.step === end - 4 + position && event.durationSteps === 1 && cutOf(event) === cutOf(roll[0]) && (!position || event.velocity > roll[position - 1].velocity);
+            }), 'Drums roll sixteenths with rising velocity through the fill beat: ' + label);
+          }
+          if (fill.device !== 'roll') {
+            const stutter = own('vox').filter(function (event) { return event.step >= end - 4 && event.step < end; });
+            assert(stutter.length === 3 && [0, 2, 3].every(function (offset, position) {
+              return stutter[position].step === end - 4 + offset && cutOf(stutter[position]) === cutOf(stutter[0]) && !stutter[position].reverse &&
+                (!position || stutter[position].velocity > stutter[position - 1].velocity);
+            }), 'The lead answers da, da-da into the next bar: ' + label);
+          }
           ['low', 'pad'].forEach(function (id) {
             assert(own(id).every(function (event) { return event.step + event.durationSteps <= end - 4 || event.step >= end; }), 'Bass and answering parts drop out for the fill: ' + id + ' / ' + label);
           });
@@ -309,7 +326,15 @@
         });
       });
     }
-    assert(fillsSeen > 20 && restsSeen > 20 && landingsSeen > 20, 'Fills, rests and landings all occur: ' + [fillsSeen, restsSeen, landingsSeen].join('/'));
+    assert(fillsSeen > 20 && restsSeen > 20 && landingsSeen > 20 && devices.roll > 3 && devices.stutter > 3 && devices.both > 3, 'Fills, rests and landings all occur with every fill device: ' + [fillsSeen, restsSeen, landingsSeen].join('/') + ' ' + JSON.stringify(devices));
+    let pushes = 0;
+    let downbeats = 0;
+    for (let index = 0; index < 40; index += 1) {
+      const solo = generator.generate([{ id: 'solo-lead' }], Object.assign({}, settings, { breaks: 0 }), 'PUSH-' + index);
+      downbeats += 1;
+      if (solo.some(function (event) { return event.step === 32; })) pushes += 1;
+    }
+    assert(pushes / downbeats > 0.15 && pushes / downbeats < 0.85, 'The lead sometimes enters B after the downbeat: ' + pushes + '/' + downbeats);
     assert(JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30 }), 'SAME')) === JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30, density: 10, size: 90 }), 'SAME')), 'Phrase ends depend only on bars, BREAKS and SEED');
     const synth = root.BlueLoopFMSynth;
     if (synth) {
