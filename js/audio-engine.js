@@ -71,8 +71,11 @@
     var offset = startRatio * lane.buffer.duration;
     var sliceSeconds = Math.min(lane.buffer.duration / eventChop, lane.buffer.duration - offset);
     var start = step * stepSeconds + (Math.floor(step) % 2 ? swing * stepSeconds : 0);
+    // Each lane sets how often its slices receive the shared pitch envelope.
+    var envelopeSettings = lane.pitchEnvChance == null ? settings
+      : Object.assign({}, settings, { pitchEnvChance: lane.pitchEnvChance });
     var envelope = global.BlueLoopPitchEnvelope
-      ? global.BlueLoopPitchEnvelope.create(rate, event, settings, start, SAMPLE_RATE)
+      ? global.BlueLoopPitchEnvelope.create(rate, event, envelopeSettings, start, SAMPLE_RATE)
       : {
         enabled: false, depth: 0, baseRate: rate, startRate: rate, decaySeconds: 0,
         points: [{ time: 0, rate: rate }],

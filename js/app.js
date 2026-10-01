@@ -9,7 +9,8 @@
   const MAX_SOURCES = 16;
   const MAX_TOTAL_SECONDS = 240;
   const colors = ['#a7d1ff', '#d6bfff', '#e7e68c', '#ffb99f', '#9dd8c8', '#efb8d3', '#b7c6f5', '#ddc5a1'];
-  const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
+  const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
+  const envelopeChances = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
   const history = [];
   const peaks = new WeakMap();
   let renderVersion = 0;
@@ -92,9 +93,8 @@
     $('target-key').disabled = importing || !state.settings.keySync;
     $('max-voices').disabled = importing;
     $('max-drum-voices').disabled = importing;
-    $('pitch-env-depth').disabled = importing;
-    $('pitch-env-time').disabled = importing;
-    document.querySelectorAll('.source-key, .source-category').forEach((select) => { select.disabled = importing; });
+    ['pitch-env-depth', 'pitch-env-time', 'pitch-env-depth-random', 'pitch-env-time-random'].forEach((id) => { $(id).disabled = importing; });
+    document.querySelectorAll('.source-key, .source-category, .pitch-envelope-lane select').forEach((select) => { select.disabled = importing; });
     document.body.classList.toggle('busy', rendering || importing);
     document.body.classList.toggle('playing', playing);
     $('play-button').classList.toggle('is-playing', playing);
@@ -168,6 +168,8 @@
     $('max-drum-voices').value = state.settings.maxDrumVoices;
     $('pitch-env-depth').value = state.settings.pitchEnvDepth;
     $('pitch-env-time').value = state.settings.pitchEnvTime;
+    $('pitch-env-depth-random').value = state.settings.pitchEnvDepthRandom;
+    $('pitch-env-time-random').value = state.settings.pitchEnvTimeRandom;
     showPitchEnvelope();
     $('duration').textContent = `${generator.duration(state.settings).toFixed(2)} SEC / LOOP`;
     $('key-sync').checked = state.settings.keySync;
@@ -181,14 +183,71 @@
   function showPitchEnvelope() {
     const depth = Number($('pitch-env-depth').value);
     const milliseconds = Number($('pitch-env-time').value);
+    const depthSpread = Number($('pitch-env-depth-random').value);
+    const timeSpread = Number($('pitch-env-time-random').value);
     $('pitch-env-depth-output').textContent = depth ? `±${depth} st` : 'OFF';
     $('pitch-env-time-output').textContent = `${milliseconds} ms`;
-    rangeFill($('pitch-env-depth'));
-    rangeFill($('pitch-env-time'));
-    const height = depth / 24 * 20;
-    const end = 15 + milliseconds / 500 * 125;
-    $('pitch-env-up').setAttribute('d', `M5 ${25 - height} L${end} 25 H155`);
-    $('pitch-env-down').setAttribute('d', `M5 ${25 + height} L${end} 25 H155`);
+    $('pitch-env-depth-random-output').textContent = `${depthSpread}%`;
+    $('pitch-env-time-random-output').textContent = `${timeSpread}%`;
+    ['pitch-env-depth', 'pitch-env-time', 'pitch-env-depth-random', 'pitch-env-time-random'].forEach((id) => rangeFill($(id)));
+    const draw = (suffix, semitones, milliseconds) => {
+      const height = semitones / 24 * 20;
+      const end = 15 + Math.min(500, Math.max(5, milliseconds)) / 500 * 125;
+      $(`pitch-env-up${suffix}`).setAttribute('d', `M5 ${25 - height} L${end} 25 H155`);
+      $(`pitch-env-down${suffix}`).setAttribute('d', `M5 ${25 + height} L${end} 25 H155`);
+    };
+    draw('', depth, milliseconds);
+    // The faint pair marks the smallest, fastest end of the per-slice spread.
+    draw('-range', depth && (depthSpread || timeSpread) ? depth * (1 - depthSpread / 100) : 0,
+      milliseconds * Math.pow(4, -timeSpread / 100));
+  }
+
+  function pitchEnvelopeLanes() {
+    const list = $('pitch-env-lane-list');
+    list.replaceChildren();
+    if (!state.lanes.length) {
+      const empty = document.createElement('span');
+      empty.className = 'pitch-envelope-lanes-empty';
+      empty.textContent = '素材を追加するとパートごとに設定できます';
+      list.append(empty);
+      return;
+    }
+    categories.groups.flatMap((category) => state.lanes.filter((lane) => categories.get(lane) === category.id)).forEach((lane) => {
+      const item = document.createElement('label');
+      item.className = 'pitch-envelope-lane';
+      item.dataset.laneId = lane.id;
+      item.style.setProperty('--lane-color', lane.color);
+      item.innerHTML = '<i aria-hidden="true"></i><span></span><select></select>';
+      item.querySelector('span').textContent = lane.name;
+      item.title = `${lane.name}：PITCH ENVがかかる断片の割合`;
+      const select = item.querySelector('select');
+      envelopeChances.forEach((chance) => {
+        const option = document.createElement('option');
+        option.value = String(chance);
+        option.textContent = `${chance}%`;
+        select.append(option);
+      });
+      const current = laneEnvelopeChance(lane);
+      select.value = String(current);
+      select.disabled = importing;
+      select.setAttribute('aria-label', `${lane.name} のPITCH ENV発生確率`);
+      item.classList.toggle('is-off', current === 0);
+      select.addEventListener('change', () => {
+        if (importing) { select.value = String(laneEnvelopeChance(lane)); return; }
+        const value = Number(select.value);
+        if (!envelopeChances.includes(value) || value === laneEnvelopeChance(lane)) return;
+        remember();
+        lane.pitchEnvChance = value;
+        updateView();
+        renderAudio();
+      });
+      list.append(item);
+    });
+  }
+
+  function laneEnvelopeChance(lane) {
+    const value = Number(lane && lane.pitchEnvChance);
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 100;
   }
 
   function playbackEvents() {
@@ -485,6 +544,7 @@
     updateKeyPlan();
     syncSettings();
     sourceList();
+    pitchEnvelopeLanes();
     sequenceView();
     drawTracks();
     updateButtons();
@@ -558,7 +618,7 @@
         state.lanes.push({
           id: `user-${++uploadNumber}`, name: file.name.replace(/\.[^.]+$/, ''), filename: file.name, kind: 'upload', category: categories.inferFilename(file.name),
           buffer, color: colors[state.lanes.length % colors.length], volume: .7,
-          muted: false, solo: false, locked: false, events: [],
+          muted: false, solo: false, locked: false, events: [], pitchEnvChance: 100,
           detectedKey, keyOverride: 'auto', keyShift: 0,
         });
         added++;
@@ -590,6 +650,7 @@
           : { tonic: 9, mode: 'minor', status: 'tonal', source: 'demo', confidence: 1, label: 'A minor' };
         lane.keyOverride = 'auto';
         lane.keyShift = 0;
+        lane.pitchEnvChance = 100;
       });
       const existing = new Set(state.lanes.map((lane) => lane.id));
       const capacity = Math.min(MAX_SOURCES - state.lanes.length, Math.floor((MAX_TOTAL_SECONDS - state.lanes.reduce((sum, lane) => sum + lane.buffer.duration, 0)) / 8));
@@ -731,7 +792,7 @@
     state.lanes.push({
       id: `fm-${++fmNumber}`, name, kind: 'fm', category: 'other', buffer,
       synthSettings: { ...options }, color: colors[state.lanes.length % colors.length], volume: .7,
-      muted: false, solo: false, locked: false, events: [],
+      muted: false, solo: false, locked: false, events: [], pitchEnvChance: 100,
       detectedKey: harmony.fromValue(`${options.tonic}:major`, 'synth'), keyOverride: 'auto', keyShift: 0,
     });
     stopFMPreview();
@@ -788,7 +849,7 @@
     updateView();
     renderAudio();
   }));
-  [['pitch-env-depth', 'pitchEnvDepth'], ['pitch-env-time', 'pitchEnvTime']].forEach(([id, key]) => {
+  [['pitch-env-depth', 'pitchEnvDepth'], ['pitch-env-time', 'pitchEnvTime'], ['pitch-env-depth-random', 'pitchEnvDepthRandom'], ['pitch-env-time-random', 'pitchEnvTimeRandom']].forEach(([id, key]) => {
     $(id).addEventListener('input', showPitchEnvelope);
     $(id).addEventListener('change', () => {
       if (importing) { syncSettings(); return; }

@@ -12,34 +12,58 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  function direction(event) {
+  // Hash only the stored cut's identity. Pitch, reverse, playback settings and
+  // lane locks must not reroll a slice's envelope when a finished phrase changes.
+  function identityHash(event, salt) {
     const item = event || {};
-    // Hash only the stored cut's identity. Pitch, reverse, playback settings and
-    // lane locks must not reroll its direction when a finished phrase changes.
     const identity = JSON.stringify([
       String(item.laneId == null ? '' : item.laneId),
       number(item.step, 0), number(item.sliceIndex, 0),
       number(item.startRatio, 0), number(item.sourceChop, 16),
       number(item.velocity, 0.8)
-    ]);
+    ].concat(salt ? [salt] : []));
     let hash = 2166136261;
     for (let index = 0; index < identity.length; index++) {
       hash = Math.imul(hash ^ identity.charCodeAt(index), 16777619);
     }
-    return hash >>> 31 ? 1 : -1;
+    return hash >>> 0;
+  }
+
+  function direction(event) {
+    return identityHash(event) >>> 31 ? 1 : -1;
+  }
+
+  // One Mulberry32 step (Tommy Ettinger; bryc's public-domain JS form, see
+  // THIRD_PARTY_NOTICES.md) spreads the FNV-1a identity hash over [0, 1).
+  // Separate salts keep the chance, depth and time draws independent.
+  function unit(event, salt) {
+    let state = (identityHash(event, salt) + 0x6D2B79F5) | 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   }
 
   function create(baseRate, event, settings, startSeconds, sampleRate) {
     const params = settings || {};
     const base = clamp(number(baseRate, 1), 1 / 128, 128);
-    const magnitude = clamp(number(params.pitchEnvDepth, 0), 0, 24);
-    const decaySeconds = clamp(number(params.pitchEnvTime, 80), 5, 500) / 1000;
+    const maximum = clamp(number(params.pitchEnvDepth, 0), 0, 24);
+    const chance = clamp(number(params.pitchEnvChance, 100), 0, 100) / 100;
+    const depthSpread = clamp(number(params.pitchEnvDepthRandom, 0), 0, 100) / 100;
+    const timeSpread = clamp(number(params.pitchEnvTimeRandom, 0), 0, 100) / 100;
+    // A lane's chance only switches slices on or off: raising it keeps every
+    // slice that already had an envelope, with the same direction and shape.
+    const selected = maximum > 0 && (chance >= 1 || unit(event, 'chance') < chance);
+    // The depth control is the largest swing; spread lowers individual slices
+    // towards zero. Time spreads evenly on a log scale, up to 4x either way.
+    const magnitude = selected ? maximum * (1 - depthSpread * unit(event, 'depth')) : 0;
+    let decaySeconds = clamp(number(params.pitchEnvTime, 80), 5, 500) / 1000;
+    if (timeSpread > 0) decaySeconds = clamp(decaySeconds * Math.pow(4, timeSpread * (2 * unit(event, 'time') - 1)), 0.005, 0.5);
     const depth = magnitude ? magnitude * direction(event) : 0;
     const startRate = base * Math.pow(2, depth / 12);
     const points = [{ time: 0, rate: startRate }];
     const consumed = [0];
 
-    if (magnitude) {
+    if (depth) {
       const start = clamp(number(startSeconds, 0), 0, 86400);
       const rate = clamp(number(sampleRate, 44100), 8000, 192000);
       // BufferSource playbackRate is k-rate: use the global rendering quantum,
@@ -89,7 +113,7 @@
     }
 
     return {
-      enabled: magnitude > 0, depth, baseRate: base, startRate, decaySeconds,
+      enabled: depth !== 0, depth, baseRate: base, startRate, decaySeconds,
       points, sourceSecondsAt, durationFor, rateAt
     };
   }

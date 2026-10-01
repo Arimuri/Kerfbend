@@ -344,6 +344,28 @@
       assert(JSON.stringify(fixture.event) === beforeEvent, 'Envelope changed source event metadata');
       assert(fixture.lane.buffer.getChannelData(0).every(function (sample, index) { return sample === beforePCM[index]; }), 'Envelope changed the original source PCM');
     });
+    await test('Per-part envelope chance switches a lane without touching other lanes', async function () {
+      var fixture = envelopeFixture(1);
+      var plain = Object.assign({}, fixture.settings, { pitchEnvDepth: 0 });
+      var off = Object.assign({}, fixture.lane, { pitchEnvChance: 0 });
+      var full = Object.assign({}, fixture.lane, { pitchEnvChance: 100 });
+      var reference = await engine.render([fixture.lane], plain, [fixture.event]);
+      var silenced = await engine.render([off], fixture.settings, [fixture.event]);
+      assert(maximumDifference(reference, silenced) === 0, 'A part at 0% still received the pitch envelope');
+      var everything = await engine.render([full], fixture.settings, [fixture.event]);
+      var unspecified = await engine.render([fixture.lane], fixture.settings, [fixture.event]);
+      assert(maximumDifference(everything, unspecified) === 0 && maximumDifference(everything, reference) > 0.05, 'A missing part chance must behave as 100%');
+      var other = Object.assign({}, fixture.lane, { id: fixture.lane.id + '-other' });
+      var otherEvent = Object.assign({}, fixture.event, { laneId: other.id });
+      assert(!global.BlueLoopAudio.eventPlayback(off, fixture.event, fixture.settings).envelope.enabled &&
+        global.BlueLoopAudio.eventPlayback(other, otherEvent, fixture.settings).envelope.enabled, 'Part chance leaked into another lane');
+      var spread = Object.assign({}, fixture.settings, { pitchEnvDepthRandom: 100, pitchEnvTimeRandom: 100 });
+      var first = await engine.render([full], spread, [fixture.event]);
+      var second = await engine.render([full], spread, [fixture.event]);
+      var playback = global.BlueLoopAudio.eventPlayback(full, fixture.event, spread);
+      assert(maximumDifference(first, second) === 0 && Math.abs(playback.envelope.depth) <= 12 && playback.duration === Math.min(playback.envelope.durationFor(playback.sliceSeconds), 4 * 60 / 120 / 4),
+        'Randomized depth and time must render deterministically and share the playback duration');
+    });
     await test('Swung forward and reverse audio follows the shared envelope source-position helper', async function () {
       var fixture = envelopeFixture(1, { swing: 50, pitchEnvTime: 83 });
       var data = fixture.lane.buffer.getChannelData(0);

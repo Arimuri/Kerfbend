@@ -10,7 +10,7 @@ Kerfbend に含めている第三者の実装・数値表と、設計を参考�
 | --- | --- | --- |
 | fft.js 4.0.4 / Fedor Indutny | `vendor/fft.js/fft.js`。音声キー解析の FFT 実装全体と、ブラウザ用の接続部分 | MIT。著作権・許諾・免責の全文をソース先頭と [LICENSE](vendor/fft.js/LICENSE) に保存 |
 | Partitura v1.2.1 掲載の Krumhansl–Kessler profiles | `js/key-analysis.js` の `PROFILES`。major/minor 各12個、計24個の数値のみ | 取得元の Apache-2.0 を [ライセンス原文](licenses/partitura-Apache-2.0.txt) と本書に記録 |
-| Mulberry32 | `js/generator.js`・`js/fm-synth.js` の `randomFor`、`js/audio-engine.js` の `randomSource` にある乱数更新部分 | Tommy Ettinger の原実装は CC0。下記 bryc の JavaScript 実装は Public domain と明記 |
+| Mulberry32 | `js/generator.js`・`js/fm-synth.js` の `randomFor`、`js/audio-engine.js` の `randomSource`、`js/pitch-envelope.js` の `unit` にある乱数更新部分 | Tommy Ettinger の原実装は CC0。下記 bryc の JavaScript 実装は Public domain と明記 |
 
 ### fft.js
 
@@ -48,7 +48,7 @@ Carol L. Krumhansl (1990), *Cognitive Foundations of Musical Pitch*, Oxford Univ
 - JavaScript 資料の固定コミット: `88c1317ea6f9b25c153afa9c369c365fed11b482`
 - ライセンス: 原実装は [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)、上記 JavaScript 資料は冒頭で `License: Public domain.` と明記。
 
-Kerfbend の乱数更新部分は、これらの公開実装と同じ Mulberry32 の定数・更新式を使用しています。変数名と周囲の処理をアプリに合わせています。`randomFor` では文字列からの seed 作成とレーン別の状態管理を加えています。この記録は既存の短い実装に対応する出典を公開前に確認したもので、最初の実装時にどの掲載箇所から取得したかまで確定するものではありません。出典を追跡できるよう、作者と確認元を記載しています。
+Kerfbend の乱数更新部分は、これらの公開実装と同じ Mulberry32 の定数・更新式を使用しています。変数名と周囲の処理をアプリに合わせています。`randomFor` では文字列からの seed 作成とレーン別の状態管理を加えています。`unit` では断片情報のハッシュを seed として1回だけ更新し、0以上1未満の値に変換しています。この記録は既存の短い実装に対応する出典を公開前に確認したもので、最初の実装時にどの掲載箇所から取得したかまで確定するものではありません。出典を追跡できるよう、作者と確認元を記載しています。
 
 ## 方式の参考資料
 
