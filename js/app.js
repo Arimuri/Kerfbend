@@ -199,8 +199,9 @@
       row.dataset.category = categories.get(lane);
       row.style.setProperty('--lane-color', lane.color);
       row.innerHTML = '<i class="source-color"></i><div><span class="source-title"></span><span class="source-detail"></span></div><button class="source-preview" type="button">▶</button><button class="source-remove" type="button">×</button><label class="source-category-control">分類 <select class="source-category"><option value="other">その他</option><option value="drums">ドラム</option></select></label><div class="source-tuning"><select class="source-key"></select><span class="key-shift"></span></div><span class="source-major-note"></span>';
-      row.querySelector('.source-title').textContent = lane.name;
-      row.querySelector('.source-title').title = lane.name;
+      const filename = lane.filename || lane.name;
+      row.querySelector('.source-title').textContent = filename;
+      row.querySelector('.source-title').title = filename;
       const entry = keyPlan.byId[lane.id];
       const sourceName = { filename: 'ファイル名', analysis: '音声推定', manual: '手動', demo: 'デモ設定' }[entry.key.source] || '未判定';
       const detail = `${lane.buffer.duration.toFixed(2)}s / ${lane.kind === 'upload' ? 'YOUR SOUND' : 'SYNTH DEMO'} · ${sourceName}`;
@@ -513,7 +514,7 @@
           errors.push(`${file.name}: キー解析を保留しました。音源は読み込めます。`);
         }
         state.lanes.push({
-          id: `user-${++uploadNumber}`, name: file.name.replace(/\.[^.]+$/, ''), kind: 'upload', category: categories.inferFilename(file.name),
+          id: `user-${++uploadNumber}`, name: file.name.replace(/\.[^.]+$/, ''), filename: file.name, kind: 'upload', category: categories.inferFilename(file.name),
           buffer, color: colors[state.lanes.length % colors.length], volume: .7,
           muted: false, solo: false, locked: false, events: [],
           detectedKey, keyOverride: 'auto', keyShift: 0,
