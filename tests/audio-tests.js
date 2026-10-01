@@ -160,6 +160,32 @@
       }
       assert(JSON.stringify(event) === sourceEvents, 'Key correction changed source events');
     });
+    await test('Note-boundary cuts play whole FM notes from their silent starts', async function () {
+      var source = engine.createFMSource({ bpm: 105, bars: 2, tonic: 2, octave: 3, density: 70, seed: 'FM-NOTES' });
+      var lane = Object.assign({ id: 'fm-notes', kind: 'fm', category: 'other', buffer: source.buffer, volume: 1, keyShift: 0, releaseSeconds: 0.03, events: [] },
+        global.BlueLoopFMSynth.noteSegments(source.phrase));
+      var config = Object.assign({}, global.BlueLoopGenerator.defaults, { bpm: 105, bars: 2, density: 100, breaks: 0, motion: 0, octave: 0, size: 50 });
+      var cuts = global.BlueLoopGenerator.generate([lane], config, 'NOTE-CUTS');
+      assert(cuts.length > 3 && cuts.every(function (cut) { return cut.lengthRatio > 0 && cut.segmentCount >= 1; }), 'FM lanes were not cut at note boundaries');
+      var output = await engine.render([lane], config, cuts);
+      var pcm = source.buffer.getChannelData(0);
+      var rendered = output.getChannelData(0);
+      var compared = 0;
+      cuts.forEach(function (cut) {
+        var playback = global.BlueLoopAudio.eventPlayback(lane, cut, config);
+        var from = Math.round(playback.start * 44100);
+        var offset = Math.round(playback.offset * 44100);
+        assert(Math.abs(pcm[offset]) < 1e-6, 'A note cut started away from the note onset');
+        assert(Math.abs(playback.sliceSeconds - cut.lengthRatio * source.buffer.duration) < 1e-9, 'A note cut used an equal-slice length');
+        var gain = cut.velocity * 0.8;
+        var span = Math.floor((playback.duration - 0.035) * 44100);
+        for (var frame = Math.round(0.007 * 44100); frame < span; frame += 37) {
+          assert(Math.abs(rendered[from + frame] - pcm[offset + frame] * gain) < 2e-3, 'A note cut did not reproduce its source note');
+          compared++;
+        }
+      });
+      assert(compared > 200, 'Too little audio was compared');
+    });
     await test('Generated FM material can be chopped, retuned, enveloped and exported without changing its source', async function () {
       var source = engine.createFMSource({ bpm: 120, bars: 2, tonic: 7, octave: 2, density: 85, index: 3, seed: 'FM-RENDER' });
       var original = source.buffer.getChannelData(0).slice();

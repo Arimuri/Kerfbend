@@ -79,14 +79,32 @@
 
     const notes = candidates.map(function (note, index) {
       const nextStep = index + 1 < candidates.length ? candidates[index + 1].step : totalSteps;
+      const steps = Math.min(note.gate, nextStep - note.step, totalSteps - note.step);
       return {
         start: note.step * stepSeconds,
-        duration: Math.min(note.gate, nextStep - note.step, totalSteps - note.step) * stepSeconds,
+        duration: steps * stepSeconds,
         midi: base + MAJOR[note.degree],
-        velocity: note.velocity
+        velocity: note.velocity,
+        step: note.step,
+        steps,
+        degree: note.degree
       };
     });
     return { settings, duration: totalSteps * stepSeconds, notes };
+  }
+
+  // Each synthesized note starts and ends at silence, so its boundaries are
+  // natural cut points. Lanes keep them to chop one note or a short run.
+  function noteSegments(result) {
+    const duration = Number(result && result.duration);
+    const notes = result && Array.isArray(result.notes) ? result.notes : [];
+    if (!(duration > 0)) return { segments: [], segmentsDuration: 0 };
+    return {
+      segmentsDuration: duration,
+      segments: notes.map(function (note) {
+        return { start: note.start, end: note.start + note.duration, step: note.step, midi: note.midi, degree: note.degree };
+      })
+    };
   }
 
   function synthesize(context, options) {
@@ -133,5 +151,5 @@
     return { buffer, phrase: result };
   }
 
-  root.BlueLoopFMSynth = Object.freeze({ normalize, phrase, synthesize });
+  root.BlueLoopFMSynth = Object.freeze({ normalize, phrase, synthesize, noteSegments });
 })(typeof window !== 'undefined' ? window : globalThis);

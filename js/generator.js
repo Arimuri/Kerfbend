@@ -67,6 +67,83 @@
     return 0;
   }
 
+  // Sources that know their note boundaries (generated FM phrases) are cut
+  // into runs of whole notes instead of equal slices.
+  function segmentPlan(lane) {
+    const duration = Number(lane && lane.segmentsDuration);
+    if (!Array.isArray(lane && lane.segments) || !(duration > 0)) return null;
+    const notes = lane.segments.filter(function (note) {
+      return note && Number.isFinite(note.start) && Number.isFinite(note.end) &&
+        note.start >= 0 && note.end > note.start && note.end <= duration + 1e-9;
+    }).sort(function (first, second) { return first.start - second.start; });
+    return notes.length ? { duration, notes } : null;
+  }
+
+  // SIZE picks how many neighbouring notes stay together in one cut.
+  function noteGroup(size) {
+    if (size < 25) return [1, 1];
+    if (size < 75) return [1, 2];
+    return [2, 3];
+  }
+
+  function noteCut(plan, first, count, stepSeconds) {
+    const last = Math.min(plan.notes.length - 1, first + count - 1);
+    const start = plan.notes[first].start;
+    const length = plan.notes[last].end - start;
+    return {
+      sliceIndex: first, segmentCount: last - first + 1,
+      startRatio: start / plan.duration, lengthRatio: length / plan.duration,
+      sourceChop: plan.notes.length, durationSteps: Math.max(1, Math.round(length / stepSeconds)),
+    };
+  }
+
+  // A jump lands on a note that sat on the same part of the beat in the
+  // source, so moved runs keep their original push or pull.
+  function noteAt(plan, position, draw) {
+    const notes = plan.notes.map(function (note, index) { return { note, index }; });
+    const beat = notes.filter(function (entry) { return Number.isInteger(entry.note.step) && entry.note.step % 4 === position % 4; });
+    const parity = notes.filter(function (entry) { return Number.isInteger(entry.note.step) && entry.note.step % 2 === position % 2; });
+    const pool = beat.length ? beat : parity.length ? parity : notes;
+    return pool[Math.floor(draw * pool.length)].index;
+  }
+
+  function noteMotif(lane, settings, random, plan, motifSteps) {
+    const scatter = 0.45;
+    const motion = settings.motion / 100;
+    const octaveProbability = settings.octave / 100;
+    const density = settings.density / 100;
+    const stepSeconds = 60 / settings.bpm / 4;
+    const group = noteGroup(settings.size);
+    const motif = [];
+    let previous = null;
+    let busyUntil = 0;
+    for (let bar = 0; bar < motifSteps / 16; bar += 1) {
+      const rhythm = rhythms[Math.floor(random() * rhythms.length)];
+      rhythm.forEach(function (position) {
+        const step = bar * 16 + position;
+        const anchor = position === 0 || position === 8;
+        // Draw everything first so OCTAVE and MOTION never shift other choices.
+        const keep = random() < Math.min(1, density * (anchor ? 1.25 : 0.92));
+        const jump = random();
+        const pick = random();
+        const size = random();
+        const semitones = octave(random, octaveProbability);
+        const reverse = random() < motion * 0.19;
+        const velocity = Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3));
+        // A run keeps sounding until its last note ends.
+        if (step < busyUntil || !(keep || step === 0)) return;
+        const first = !previous || jump < scatter * 0.7
+          ? noteAt(plan, position, pick)
+          : (previous.sliceIndex + previous.segmentCount) % plan.notes.length;
+        const cut = noteCut(plan, first, group[0] + Math.floor(size * (group[1] - group[0] + 1)), stepSeconds);
+        motif.push(Object.assign({ laneId: lane.id, step }, cut, { semitones, reverse, velocity }));
+        previous = cut;
+        busyUntil = step + cut.durationSteps;
+      });
+    }
+    return motif;
+  }
+
   function lockedEvents(lane, totalSteps) {
     return lane.events.filter(function (event) {
       return event && Number.isFinite(event.step) && event.step >= 0 && event.step < totalSteps;
@@ -91,10 +168,11 @@
     const minimumLength = 1 + Math.floor(settings.size / 50);
     const maximumLength = 1 + Math.round(settings.size * 0.03);
     const motifSteps = Math.min(totalSteps, 32);
-    const motif = [];
-    let slice = Math.floor(random() * settings.chop);
+    const notes = segmentPlan(lane);
+    const motif = notes ? noteMotif(lane, settings, random, notes, motifSteps) : [];
+    let slice = notes ? 0 : Math.floor(random() * settings.chop);
 
-    for (let bar = 0; bar < motifSteps / 16; bar += 1) {
+    for (let bar = 0; !notes && bar < motifSteps / 16; bar += 1) {
       const rhythm = rhythms[Math.floor(random() * rhythms.length)];
       rhythm.forEach(function (position) {
         // Beat one and beat three supply an anchor; the other cuts leave more room.
@@ -129,8 +207,13 @@
         // The opening bar of each repeated motif stays recognizable. Change the answer.
         const answer = cycle > 0 && original.step >= 16;
         if (answer && random() < scatter * 0.23) {
-          event.sliceIndex = Math.floor(random() * settings.chop);
-          event.startRatio = event.sliceIndex / settings.chop;
+          if (notes) {
+            const first = noteAt(notes, event.step % 16, random());
+            Object.assign(event, noteCut(notes, first, event.segmentCount, 60 / settings.bpm / 4));
+          } else {
+            event.sliceIndex = Math.floor(random() * settings.chop);
+            event.startRatio = event.sliceIndex / settings.chop;
+          }
           event.semitones = octave(random, octaveProbability);
           event.reverse = random() < motion * 0.19;
         }

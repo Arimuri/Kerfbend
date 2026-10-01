@@ -53,6 +53,13 @@
     }), 'Tempo changes preserve melody and rhythm while scaling note timing');
     const transposed = synth.phrase(Object.assign({}, options, { tonic: 2, octave: 3 }));
     assert(transposed.notes.every(function (note, index) { return note.midi === phrase.notes[index].midi + 5 && note.start === phrase.notes[index].start; }), 'Key and register controls transpose the whole major phrase');
+    const cutPoints = synth.noteSegments(phrase);
+    assert(cutPoints.segmentsDuration === phrase.duration && cutPoints.segments.length === phrase.notes.length && cutPoints.segments.every(function (segment, index) {
+      const note = phrase.notes[index];
+      return segment.start === note.start && near(segment.end, note.start + note.duration) && segment.step === note.step && segment.midi === note.midi && segment.degree === note.degree &&
+        Number.isInteger(note.step) && near(note.start, note.step * stepSeconds) && near(note.duration, note.steps * stepSeconds) && note.midi === 45 + [0, 2, 4, 5, 7, 9, 11, 12][note.degree];
+    }), 'Note segments expose every note boundary, grid step and scale degree');
+    assert(synth.noteSegments(null).segments.length === 0 && synth.noteSegments({ duration: 0, notes: [] }).segmentsDuration === 0, 'Missing phrases produce no note segments');
 
     const signatures = new Set();
     for (let seed = 0; seed < 24; seed++) {

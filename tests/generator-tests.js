@@ -113,6 +113,57 @@
     }
     assert(longestSilence >= 32, 'Breaks at maximum creates half a phrase of contiguous silence across lanes');
     assert(generator.duration({ bpm: 120, bars: 4 }) === 8, 'Duration is exact in musical bars');
+
+    const sixteenth = 60 / 120 / 4;
+    const noteSteps = [[0, 2], [2, 1], [3, 3], [6, 2], [8, 3], [11, 1], [12, 2], [14, 2], [16, 4], [20, 3], [23, 1], [24, 2], [26, 2], [28, 4]];
+    const noteLane = {
+      id: 'fm-notes', segmentsDuration: 32 * sixteenth,
+      segments: noteSteps.map(function (note, index) {
+        return { start: note[0] * sixteenth, end: (note[0] + note[1]) * sixteenth - (index % 3 ? 0 : sixteenth / 2), step: note[0], midi: 48 + index, degree: index % 7 };
+      })
+    };
+    function noteRuns(events) {
+      return events.every(function (event) {
+        const first = noteLane.segments[event.sliceIndex];
+        const last = noteLane.segments[event.sliceIndex + event.segmentCount - 1];
+        return first && last && event.startRatio === first.start / noteLane.segmentsDuration &&
+          event.lengthRatio === (last.end - first.start) / noteLane.segmentsDuration &&
+          event.sourceChop === noteLane.segments.length && Number.isInteger(event.step) && event.durationSteps >= 1;
+      });
+    }
+    [[0, 1, 1], [50, 1, 2], [100, 2, 3]].forEach(function (values) {
+      const size = values[0];
+      [2, 4, 8].forEach(function (bars) {
+        const events = generator.generate([noteLane], Object.assign({}, settings, { size, bars, density: 100, breaks: 0 }), 'NOTE-RUNS');
+        assert(events.length >= bars && noteRuns(events), 'Note cuts start and end on note boundaries at size ' + size + ' / ' + bars + ' bars');
+        assert(events.every(function (event) {
+          return event.segmentCount <= values[2] && (event.segmentCount >= values[1] || event.sliceIndex + event.segmentCount === noteLane.segments.length);
+        }), 'Size ' + size + ' keeps runs of ' + values[1] + '–' + values[2] + ' notes');
+        assert(events.every(function (event, index) {
+          return event.step + event.durationSteps <= (index + 1 < events.length ? events[index + 1].step : bars * 16);
+        }), 'Note runs never overlap within the lane at size ' + size + ' / ' + bars + ' bars');
+        const whole = events.filter(function (event) {
+          return event.durationSteps === Math.max(1, Math.round(event.lengthRatio * noteLane.segmentsDuration / sixteenth));
+        });
+        assert(whole.length / events.length > 0.7, 'Most runs play every note to its end at size ' + size + ' / ' + bars + ' bars');
+      });
+    });
+    const noteSettings = Object.assign({}, settings, { bars: 8, density: 100, breaks: 0 });
+    const notePair = generator.generate([noteLane, lanes[0]], noteSettings, 'NOTE-MACROS');
+    assert(JSON.stringify(notePair) === JSON.stringify(generator.generate([noteLane, lanes[0]], noteSettings, 'NOTE-MACROS')), 'Note cuts are deterministic');
+    assert(JSON.stringify(notePair.filter(function (event) { return event.laneId === 'voice'; })) === JSON.stringify(generator.generate([lanes[0]], noteSettings, 'NOTE-MACROS')), 'A note-cut lane does not change other lanes');
+    [0, 100].forEach(function (octave) {
+      assert(omit(generator.generate([noteLane], Object.assign({}, noteSettings, { octave }), 'NOTE-MACROS'), 'semitones') === omit(notePair.filter(function (event) { return event.laneId === 'fm-notes'; }), 'semitones'), 'Octave ' + octave + ' changes only pitch in note cuts');
+    });
+    [0, 100].forEach(function (motion) {
+      assert(omit(generator.generate([noteLane], Object.assign({}, noteSettings, { motion }), 'NOTE-MACROS'), 'reverse') === omit(notePair.filter(function (event) { return event.laneId === 'fm-notes'; }), 'reverse'), 'Motion ' + motion + ' changes only reverse in note cuts');
+    });
+    [{ segments: [], segmentsDuration: 4 }, { segments: noteLane.segments, segmentsDuration: 0 }, { segments: [{ start: 1, end: 0.5 }], segmentsDuration: 4 }].forEach(function (invalid, index) {
+      const fallback = generator.generate([Object.assign({ id: 'fallback' }, invalid)], settings, 'FALLBACK');
+      assert(JSON.stringify(fallback) === JSON.stringify(generator.generate([{ id: 'fallback' }], settings, 'FALLBACK')), 'Unusable note data falls back to equal slices: ' + index);
+    });
+    const lockedNotes = generator.generate([Object.assign({}, noteLane, { locked: true, events: notePair.filter(function (event) { return event.laneId === 'fm-notes'; }) })], Object.assign({}, noteSettings, { size: 0 }), 'OTHER');
+    assert(JSON.stringify(lockedNotes) === JSON.stringify(notePair.filter(function (event) { return event.laneId === 'fm-notes'; })), 'Locked note cuts keep their runs through size and seed changes');
     return { passed: assertions.length, assertions };
   };
 })(typeof window !== 'undefined' ? window : globalThis);

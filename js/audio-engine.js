@@ -69,7 +69,10 @@
       ? clamp(number(event.sliceIndex, 0), 0, eventChop - 1) / eventChop
       : clamp(number(event.startRatio, 0), 0, 1);
     var offset = startRatio * lane.buffer.duration;
-    var sliceSeconds = Math.min(lane.buffer.duration / eventChop, lane.buffer.duration - offset);
+    // Note-boundary cuts carry their own length; equal slices use the chop.
+    var lengthRatio = number(event.lengthRatio, 0);
+    var sliceSeconds = Math.min(lengthRatio > 0 ? lengthRatio * lane.buffer.duration : lane.buffer.duration / eventChop,
+      lane.buffer.duration - offset);
     var start = step * stepSeconds + (Math.floor(step) % 2 ? swing * stepSeconds : 0);
     // Each lane sets how often its slices receive the shared pitch envelope.
     var envelopeSettings = lane.pitchEnvChance == null ? settings
