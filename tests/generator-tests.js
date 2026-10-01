@@ -503,8 +503,8 @@
           return event.loopBars === 2 && event.sliceIndex === 0 && event.semitones === 0 && !event.reverse && start % 32 === 0 &&
             Math.abs(event.lengthRatio * 32 - event.durationSteps) < 1e-9 && event.startRatio + event.lengthRatio <= 1 + 1e-9;
         }), 'Whole-loop events play the source from where the loop is at that step: ' + bars + ' bars / breaks ' + breaks);
-        assert(Array.from(covered).every(function (count, step) { return count === (rest && step >= rest.start && step < rest.end ? 0 : 1); }),
-          'A whole loop sounds once everywhere except the shared rest: ' + bars + ' bars / breaks ' + breaks);
+        assert(Array.from(covered).every(function (count) { return count === 1; }) && events.every(function (event) { return event.startRatio === 0; }),
+          'A whole loop plays from its top and keeps sounding through the shared rest: ' + bars + ' bars / breaks ' + breaks + (rest ? ' (rest ' + rest.start + '-' + rest.end + ')' : ''));
         assert(JSON.stringify(events) === JSON.stringify(generator.generate([loopLane], Object.assign({}, loopSettings, { bpm: 77, size: 0, motion: 100, octave: 100 }), seed)),
           'Tempo, size, motion and octave never change a whole loop: ' + bars + ' bars / breaks ' + breaks);
       });
