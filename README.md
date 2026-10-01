@@ -1,81 +1,83 @@
 # Kerfbend
 
-in the blue shirt 向けのブラウザ版ループ生成アプリです。素材のファイル名または音声からキーを判定し、メジャーキー基準で同期してフレーズを生成します。FFTはMITライセンスのfft.js 4.0.4を使用します。同梱コード・数値表の出典は [第三者表示](THIRD_PARTY_NOTICES.md)、処理方式は [実装の説明](docs/reference-algorithms.md) に記載しています。
+A browser-based loop generator for in the blue shirt. Kerfbend detects keys from filenames or audio, aligns sources using major-key references, and generates chopped phrases. FFT processing uses fft.js 4.0.4 under the MIT license. See [Third-party notices](THIRD_PARTY_NOTICES.md) for bundled code and data, and [Implementation notes](docs/reference-algorithms.md) for details of the processing methods.
 
-## 起動
+## Getting started
 
-`index.html` を Chrome または Safari で開きます。ビルド・インストール・サーバーは不要です。通信せず、音声処理はブラウザ内で完結します。
+Open `index.html` in Chrome or Safari. No build, installation, or server is required. All audio processing runs locally in your browser without network requests.
 
-ローカルサーバーを使う場合：
+To use a local server:
 
 ```sh
 python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
-その後 `http://localhost:8000` を開きます。
+Then open `http://localhost:8000`.
 
-## 使い方
+## Usage
 
-1. デモで再生するか、自分の音源をドラッグして追加します。デモは合成音で、アーティストの実音源ではありません。素材名の横の ▶ で元の音を4秒まで試聴、×で削除できます。素材欄の「全消し」はドラム・その他をまとめて削除します。↶で元に戻せます。
-2. `KEY SYNC` は初期状態でON。ファイル名にキーがあれば優先し、なければ音声を解析して合わせます。マイナーは平行調のメジャーに読み替え、合わせ先もメジャーキーで指定します。各素材の元のキーはマイナー表記でも修正でき、補正解除もできます。
-3. `busy` は発音密度、`breaks` はまとまった休符、`size` は切片と発音の長さ、`motion` は逆再生の変化です。`octave` は±1オクターブ移動の確率を独立して指定します（0〜100%、初期値12%）。0%でオクターブ移動なし、100%ですべての断片が上下どちらかに移動します。上下の抽選比率は下1：上3です。LOCK中のレーンは元の配置・音程を保持します。
-4. 「新しいフレーズ」で別の配置を探します。`LOCK` はレーンの断片と配置を固定、`M` はミュート、`S` はソロです。レーン音量も調整できます。
-5. 気に入ったら「WAVを書き出す」でDAWへ。44.1 kHz / 16-bit / stereo、設定した小節数とBPMに合った長さで出力します。キー同期の補正を含め、試聴と同じバッファを書き出します。`MONITOR` は試聴音量だけを変更します。
+The interface currently uses Japanese labels; button names below are translated into English.
 
-「＋ FM音源を生成」では、サイン波のFM合成で元フレーズを作れます。現在のBPM・小節数を使用し、キー、基準オクターブ（初期値2）、変調周波数の比率、FMの強さ、減衰、音の密度を調整できます。FMの強さ0はサイン波です。「生成・試聴」でチョップ前のフレーズ全体を確認し、「別のフレーズ」でSEEDを更新。「素材に追加してチョップ」で「その他」に追加します。合成時のメジャーキーを記録するため音声解析は不要で、キー同期・同時発音数・各エフェクト・WAV書き出しを適用できます。追加は↶で戻せます。素材数・合計時間の上限は読み込み素材と共通です。追加済みの音源は合成設定やBPMを変えても作り直さず、別の素材として生成・追加します。
+1. Play the demos or drag in your own audio files. The demos are synthesized sounds, not recordings by the artist. Click ▶ beside a source name to preview up to four seconds of the original audio, or × to remove it. **Clear all** in the source panel removes both drum and other sources. Use ↶ to undo.
+2. `KEY SYNC` is enabled by default. Keys in filenames take priority; otherwise, Kerfbend analyzes the audio. Minor keys are interpreted as their relative majors, and target keys are selected as major keys. You can correct each source's original key, including minor-key labels, or disable correction for that source.
+3. `busy` controls note density, `breaks` controls stretches of silence, `size` controls slice and note lengths, and `motion` controls reverse playback. `octave` independently sets the probability of a one-octave shift up or down (0–100%, default 12%). At 0%, no slices shift; at 100%, every slice shifts in one direction. The down-to-up selection ratio is 1:3. Locked lanes retain their existing placement and octave shifts.
+4. Click **New phrase** to generate another arrangement. `LOCK` preserves a lane's slices and placement, `M` mutes it, and `S` solos it. Each lane also has a volume control.
+5. Click **Export WAV** to save a loop for your DAW. Output is 44.1 kHz, 16-bit stereo, with a duration matching the selected BPM and number of bars. Export uses the same audio buffer as playback, including key correction. `MONITOR` adjusts listening volume only.
 
-素材はファイル名から「ドラム」「その他」に自動分類し、素材欄から手動でも変更できます。「同時発音数」はドラム・その他それぞれ1〜8個（初期値は各8個）で指定できます。各分類で重なる断片が上限を超える場合は一部の発音を省略します。素材や元の配置は削除せず、上限を戻すと同じ配置に戻ります。ミュート・ソロ・音量0のレーンは発音枠を使いません。LOCKは元の配置を保持し、再生には同時発音数の上限を適用します。分類と上限の変更は元に戻せます。プレビューとWAV書き出しには同じ制限を適用します。
+**+ Generate FM Source** creates an original phrase using sine-wave FM synthesis at the current BPM and bar length. Adjust the key, base octave (default 2), modulation frequency ratio, FM amount, decay, and note density. An FM amount of 0 produces a sine wave. **Generate & preview** plays the complete phrase before chopping; **Another phrase** changes its SEED. **Add source & chop** adds it to the Other group. Its major key is recorded during synthesis, so audio analysis is unnecessary. Key sync, voice limits, effects, and WAV export all apply. Use ↶ to undo the addition. Generated and imported sources share the same source-count and total-duration limits. Changing synthesis settings or BPM does not regenerate sources already added; generate and add a new source instead.
 
-「PITCH ENV」は、各断片の頭でピッチを上下ランダムに振り、元のピッチへ戻すエンベロープです。振れ幅は0〜24半音（0でOFF）、戻る時間は5〜500 ms。キー同期・octave適用後の音程に加算し、同じ断片では再生・書き出しのたびに方向が変わりません。設定変更で素材や断片の配置を作り直さず、LOCK中にも反映します。短い断片では戻り切る前に音が終わる場合があります。
+Sources are automatically classified as **Drums** or **Other** based on their filenames. You can change the category in the source panel. Each group has an independent **voice limit** of 1–8 simultaneous sounds (default 8 each). If overlapping slices exceed a group's limit, some are omitted from playback. Sources and their original arrangements are retained, so raising the limit restores the omitted slices. Muted lanes, lanes excluded by solo, and lanes at zero volume do not use voice slots. `LOCK` preserves the original arrangement, while playback still follows the voice limits. Category and limit changes can be undone. Loop playback and WAV export use the same limits.
 
-Space：再生・停止、R：新しいフレーズ、⌘/Ctrl + Z：元に戻す（12操作まで）。入力欄やボタンにフォーカスがある場合は、通常の入力・操作を優先します。
+`PITCH ENV` briefly shifts each slice's pitch up or down at random, then returns it to its original pitch. Depth ranges from 0–24 semitones (0 disables the effect), and return time ranges from 5–500 ms. The envelope is applied after key sync and octave shifts. A given slice keeps the same direction across playback and export. Changing these settings preserves sources and slice placement, and also affects locked lanes. Short slices may end before their pitch fully returns.
 
-## 自動キー合わせ
+Keyboard shortcuts: **Space** to play or stop, **R** for a new phrase, and **⌘/Ctrl + Z** to undo up to 12 actions. Normal input and control behavior takes priority when a field or button has focus.
 
-優先順位は **手動指定 → ファイル名 → 音声解析** です。
+## Automatic key alignment
 
-**すべての音程付き素材をメジャーキー基準に統一して処理します。** 元のキー情報は保持したまま、`A minor → C major`、`D minor → F major`、`F# minor → A major` と平行調に読み替えます。この読み替え自体では音程を変えません。元のキーと処理用キーを素材欄に併記し、合わせ先・書き出し名にはメジャー表記を使用します。
+For imported sources, key information is prioritized as **manual override → filename → audio analysis**.
 
-- ファイル名：`vocal_128_F#min.wav`、`piano_Bb_minor.wav`、`loop_D major.wav`、`pad_8A.wav`、`808_C1.wav` などに対応。異名同音、Camelot、Unicodeの♯/♭を正規化します。音名のみの場合は長短調を決めつけず、一般単語・BPM・take番号の誤認を抑えます。矛盾するキーがある場合は音声解析へ回します。
-- 音声解析：帯域制限後のFFT、音高ピークの検出、12音の分布（chroma）、長短調のプロファイル照合を使用。長い素材も全体から最大96窓を選んで解析し、途中で画面処理に制御を返します。逆相ステレオもチャンネル別のパワーで扱います。
-- 単音は元情報を音名のみとして保持し、処理上は同じルートのmajorとして扱います（D単音ならD major基準）。長短調を解析で確定したという意味ではありません。明確な和音はルートと長短を推定します。複数のキーが競合する場合は保留。無音・ノイズ・明確な打楽器名は移調しません。素材のメニューから手動で指定できます。
-- 合わせ先の自動選択はユーザー素材をデモより優先し、その中で長短調のあるキー、明示されたキーを優先します。選ばれた基準素材そのものは移調しません。追加・削除や元キーの修正で基準が変わるため、固定したい場合は合わせ先を手動指定します。
-- キー同期は、ファイル名・手動指定・音声推定のいずれも、メジャー基準に正規化した主音と合わせ先の主音との差を使用します。移調量は最短の半音距離とし、ちょうど6半音の場合は下方向を選びます。chromaは音源のキー推定にだけ使い、キー同期ではchromaの採点や近接スコアの閾値を使いません。断片ごとに再推定せず、素材全体の補正を保ちます。
-- 読み替え後のメジャーキーから合わせ先への移調量を求めます。`A minor`はC major基準なので、合わせ先C majorなら0半音、D majorなら＋2半音。`D minor`はF major基準なので、合わせ先C majorなら−5半音です。素材の長短調やコード進行そのものを作り替える機能ではありません。
-- 解析は推定です。短いフレーズ、転調、複雑な和音は誤判定・保留の可能性があり、元キーを手動で修正できます。チューニングずれは検出に考慮しますが、セント単位の補正は行いません。
+**All tonal sources are processed using major-key references.** Original key information is retained, while minor keys are interpreted as their relative majors: `A minor → C major`, `D minor → F major`, and `F# minor → A major`. This reinterpretation alone does not change the audio's pitch. The source panel shows both the original key and the processing key; target keys and export filenames use major-key labels.
 
-## 現在の範囲
+- **Filenames:** Supports names such as `vocal_128_F#min.wav`, `piano_Bb_minor.wav`, `loop_D major.wav`, `pad_8A.wav`, and `808_C1.wav`. Enharmonic spellings, Camelot notation, and Unicode ♯/♭ symbols are normalized. Note-only labels do not imply a major or minor key. Parsing avoids mistaking ordinary words, BPM values, or take numbers for keys. Conflicting key labels fall back to audio analysis.
+- **Audio analysis:** Uses FFT after band limiting, pitch-peak detection, a 12-pitch-class distribution (chroma), and comparison with major/minor profiles. Up to 96 windows are sampled across the full source, including long files, with processing yielding periodically to keep the interface responsive. Stereo channels are analyzed by power separately to handle opposite-polarity signals.
+- **Single notes and uncertain keys:** A single note retains its note-only label and uses the same root's major key as a processing convention—for example, a D note uses D major. This does not mean the analyzer has identified its mode. Clear chords are analyzed for root and mode; competing keys leave correction pending. Silence, noise, and clearly named percussion are not automatically transposed. You can set the key manually in the source menu.
+- **Automatic target selection:** User sources, including generated FM phrases, take priority over demos. Within that group, keys with a known mode take priority over root-only labels, and explicitly known keys take priority over estimates. The selected reference source is not transposed. Adding or removing sources, or correcting an original key, can change the reference. Select a target manually to keep it fixed.
+- **Transposition:** Key sync uses the difference between the source's major-reference tonic and the target tonic, regardless of whether the key came from a filename, a manual setting, or analysis. It chooses the shortest semitone distance, shifting downward for an exact six-semitone tie. Chroma is used only to estimate source keys; key alignment does not use chroma scoring or similarity thresholds. Correction is applied consistently to the entire source rather than re-estimated for each slice.
+- **Relative-major examples:** `A minor` uses C major as its reference, so it shifts by 0 semitones for a C major target and +2 for D major. `D minor` uses F major, so it shifts by −5 semitones for C major. This does not convert the source's chords or chord progression from minor to major.
+- **Accuracy:** Analysis is an estimate. Short phrases, key changes, or complex chords may produce incorrect or uncertain results; you can correct the original key manually. Tuning offsets are considered during detection, but cent-level correction is not applied.
 
-- 最大16素材、2/4/8小節、40〜200 BPM、スウィング。
-- 1ファイル40 MB・120秒以内、合計240秒以内。対応形式はブラウザのデコーダーによります。WAV/MP3が使いやすく、AIFFなどは環境によって読み込めません。
-- 同じ素材・レーンID・設定・SEEDで同じ配置を生成します。ロックしたレーンは生成前の配置を引き継ぎます。
-- 1〜2小節のモチーフを反復し、後半に小さな変化を付けます。音源を均等分割し、短いフェードで切片のクリックを軽減します。
-- 調整後はフレーズを再描画・再レンダーし、再生中ならループの先頭から再開します。再生とWAV書き出しには同じ音声バッファを使用します。
-- ロック中もテンポ・スウィング・ミキサー・キー同期の変更は反映されます。小節数を短くすると、範囲外のイベントを除き末尾を切ります。
-- ピッチはキー同期の半音補正に、octaveの±1オクターブを加算し、PITCH ENVで断片冒頭の音程を変化させます。再生速度も変わります。独立したタイムストレッチ、トランジェント検出は未実装です。
-- プロジェクト保存、ステム書き出し、動画、クラウド機能は未実装です。リロードやページを閉じる操作で素材と編集状態は消えるので、必要なループはWAVに保存してください。
+## Features and limits
 
-## 構成と検証
+- Up to 16 sources, 2/4/8 bars, 40–200 BPM, and swing.
+- Up to 40 MB and 120 seconds per file, with 240 seconds of source audio in total. Supported formats depend on the browser's decoder. WAV and MP3 are generally straightforward; formats such as AIFF may not load in every environment.
+- The same sources, lane IDs, settings, and SEED produce the same arrangement. Locked lanes retain their previous arrangement.
+- One- or two-bar motifs repeat with small variations later in the phrase. Sources are divided into equal slices, with short fades to reduce clicks.
+- Adjustments redraw and re-render the phrase. If playback is active, it restarts from the beginning of the loop. Playback and WAV export use the same audio buffer.
+- Tempo, swing, mixer, and key-sync changes also affect locked lanes. Shortening the loop removes events outside its new range and trims its end.
+- Pitch combines key-sync correction, `octave` shifts of ±1 octave, and `PITCH ENV` changes at the start of each slice. Pitch changes also affect playback speed. Independent time-stretching and transient detection are not implemented.
+- Project saving, stem export, video, and cloud features are not implemented. Reloading or closing the page clears sources and edits, so export any loops you want to keep as WAV files.
 
-- `js/generator.js`：seed付き乱数、モチーフ・休符・ロックを含むイベント生成。
-- `js/fm-synth.js`：SEEDに基づくメジャースケールのフレーズと、サイン波のFM合成。
-- `js/audio-engine.js`：Web Audio、合成デモ、読み込み、OfflineAudioContextでのレンダー、WAVエンコード。
-- `js/playback-plan.js`：元の配置を保持したドラム・その他それぞれの同時発音数の制限。スウィングを含む発音の重なりを判定し、波形表示と音声処理で共有。
-- `js/pitch-envelope.js`：断片ごとのピッチエンベロープと、再生速度・読み出し位置の計算。
-- `js/source-category.js`：ファイル名によるドラム分類と、手動指定を優先した素材の分類。
-- `js/filename-key.js`：ファイル名のキー情報取得。
-- `js/key-analysis.js`：音源からの音高・キー推定。
-- `vendor/fft.js/`：バージョン固定のFFT実装、MITライセンス全文、出典・ハッシュ情報。ブラウザ実行時のCDNアクセスやnpmインストールは不要。
-- `js/key-sync.js`：情報の優先順位、合わせ先の選択、キー同期計算。
-- `js/app.js`：画面、履歴、非同期レンダーの世代管理、インポート、波形表示。
-- `styles.css`：デスクトップ・モバイル用レイアウト。
+## Project structure and verification
 
-`tests/index.html` をブラウザで開き「Run tests」を押すと、生成の再現性・ロック、FM合成の音程・波形・再現性、同時発音数・配置保持、ファイル名の正常系・誤検出、合成音のキー解析、相対調とキー情報の優先順位、実際のWeb AudioとWAVの音程・長さ・逆再生・ピーク制限を確認できます。キー解析は合成音で検証しており、実録音の正解ラベル付き評価はまだ行っていません。
+- `js/generator.js`: Seeded event generation, including motifs, rests, and lane locks.
+- `js/fm-synth.js`: Seeded major-scale phrases and sine-wave FM synthesis.
+- `js/audio-engine.js`: Web Audio, synthesized demos, file decoding, rendering with `OfflineAudioContext`, and WAV encoding.
+- `js/playback-plan.js`: Independent voice limits for drum and other sources while preserving the original arrangement. Overlap detection includes swing and is shared by waveform display and audio rendering.
+- `js/pitch-envelope.js`: Per-slice pitch envelopes, playback rates, and source read positions.
+- `js/source-category.js`: Filename-based drum classification and manual category overrides.
+- `js/filename-key.js`: Key extraction from filenames.
+- `js/key-analysis.js`: Pitch and key estimation from audio.
+- `vendor/fft.js/`: Pinned FFT implementation, full MIT license, provenance, and hashes. No runtime CDN access or npm installation is required.
+- `js/key-sync.js`: Key-information priority, target selection, and transposition calculations.
+- `js/app.js`: Interface, undo history, version tracking for asynchronous renders, source import, and waveform display.
+- `styles.css`: Desktop and mobile layouts.
 
-FFTは直接DFTとの照合と4096点の既知信号で検証します。第三者ソースとライセンス原文の収録ハッシュは `python3 scripts/verify_vendor.py` で確認できます。
+Open `tests/index.html` in a browser and click **Run tests** to verify generation reproducibility and locks; FM pitch, waveforms, and reproducibility; voice limits and arrangement preservation; filename parsing and false positives; key analysis of synthesized audio; relative keys and key-information priority; and actual Web Audio/WAV pitch, duration, reverse playback, and peak limiting. Key analysis is tested with synthesized audio; evaluation against labeled real recordings has not yet been performed.
 
-## 出典・ライセンスと公開用ソース
+FFT is checked against a direct DFT and a known 4096-sample signal. Run `python3 scripts/verify_vendor.py` to verify the bundled hashes of third-party source code and license texts.
 
-[ライセンス表示](licenses.html)、[第三者表示](THIRD_PARTY_NOTICES.md)、[公開用スナップショットの説明](docs/publication.md) を参照してください。アプリ本体のライセンス指定と、第三者コード・データの利用条件は別です。
+## Attribution, licenses, and source snapshots
 
-`python3 scripts/export_source.py` で、コミット済みファイルだけを含む `exports/kerfbend-source.zip` を作成できます。Git履歴、ローカル設定、読み込んだ音源は入りません。
+See [License notices](licenses.html), [Third-party notices](THIRD_PARTY_NOTICES.md), and [Source snapshot documentation](docs/publication.md). Licensing for the application itself is separate from the terms covering third-party code and data.
+
+Run `python3 scripts/export_source.py` to create `exports/kerfbend-source.zip` containing only committed files. Git history, local settings, and imported audio are excluded.
