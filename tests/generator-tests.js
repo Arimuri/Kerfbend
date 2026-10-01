@@ -50,12 +50,6 @@
     assert(JSON.stringify(voiceSnapshot) === previousSnapshot, 'Lock trimming does not mutate the stored phrase');
     assert(generator.generate([{ id: 'silent', locked: true, events: [] }], settings, 'BLUE').length === 0, 'An intentionally empty locked lane stays empty');
 
-    const motif = generator.generate([{ id: 'motif' }], Object.assign({}, settings, { breaks: 0 }), 'REPEAT');
-    const opening = motif.filter(function (event) { return event.step < 16; });
-    const closing = motif.filter(function (event) { return event.step >= 32 && event.step < 48; }).map(function (event) {
-      return Object.assign({}, event, { step: event.step - 32 });
-    });
-    assert(JSON.stringify(opening) === JSON.stringify(closing), 'The opening bar of a two-bar motif repeats unchanged');
     assert(generator.generate(lanes, Object.assign({}, settings, { density: 0 }), 'SILENCE').length === 0, 'Density zero creates silence');
     assert([0, 25, 50, 75, 100].map(function (size) { return generator.getChop({ size }); }).join(',') === '32,24,16,8,4', 'Size selects the expected source subdivisions');
     const withoutMotion = generator.generate(lanes, Object.assign({}, settings, { motion: 0 }), 'STILL');
@@ -164,6 +158,47 @@
     });
     const lockedNotes = generator.generate([Object.assign({}, noteLane, { locked: true, events: notePair.filter(function (event) { return event.laneId === 'fm-notes'; }) })], Object.assign({}, noteSettings, { size: 0 }), 'OTHER');
     assert(JSON.stringify(lockedNotes) === JSON.stringify(notePair.filter(function (event) { return event.laneId === 'fm-notes'; })), 'Locked note cuts keep their runs through size and seed changes');
+    function barOf(events, index) {
+      return events.filter(function (event) { return event.step >= index * 16 && event.step < index * 16 + 16; }).map(function (event) {
+        return Object.assign({}, event, { step: event.step - index * 16 });
+      });
+    }
+    function shape(events, withDuration) {
+      return JSON.stringify(events.map(function (event) {
+        const copy = Object.assign({}, event);
+        if (!withDuration) delete copy.durationSteps;
+        return copy;
+      }));
+    }
+    function before(events, step) { return events.filter(function (event) { return event.step < step; }); }
+    function after(events, step) { return events.filter(function (event) { return event.step >= step; }); }
+    const formSettings = Object.assign({}, settings, { breaks: 0, density: 70 });
+    let newEndings = 0;
+    let contrasts = 0;
+    let forms = 0;
+    for (let index = 0; index < 30; index += 1) {
+      [{ id: 'form-voice' }, noteLane].forEach(function (lane) {
+        const seed = 'FORM-' + index;
+        const four = generator.generate([lane], formSettings, seed);
+        const a = barOf(four, 0);
+        const answer = barOf(four, 1);
+        const b = barOf(four, 2);
+        assert(shape(barOf(four, 3), true) === shape(a, true), 'Bar 4 returns exactly to bar 1 (A): ' + lane.id + ' / ' + seed);
+        assert(shape(before(answer, 12)) === shape(before(a, 12)) && after(answer, 12).length > 0, 'Bar 2 keeps the first three beats of A and adds its own ending: ' + lane.id + ' / ' + seed);
+        if (shape(after(answer, 12)) !== shape(after(a, 12))) newEndings += 1;
+        if (shape(b) !== shape(a)) contrasts += 1;
+        forms += 1;
+        const two = generator.generate([lane], Object.assign({}, formSettings, { bars: 2 }), seed);
+        assert(shape(barOf(two, 0), true) === shape(a, true) && shape(barOf(two, 1)) === shape(answer), 'Two-bar loops play A and its answer: ' + lane.id + ' / ' + seed);
+        const eight = generator.generate([lane], Object.assign({}, formSettings, { bars: 8 }), seed);
+        assert([0, 1, 2, 3, 4, 5].every(function (bar) { return shape(barOf(eight, bar)) === shape(barOf(four, bar % 4)); }) &&
+          shape(before(barOf(eight, 6), 12)) === shape(before(b, 12)) && shape(barOf(eight, 7)) === shape(answer),
+        'Eight-bar loops repeat the form, vary the second B and close with the answer: ' + lane.id + ' / ' + seed);
+        assert([0, 1, 2, 3].every(function (bar) { return barOf(four, bar).length <= 8; }), 'Each bar of the form keeps at most eight onsets: ' + lane.id + ' / ' + seed);
+      });
+    }
+    assert(newEndings === forms, 'The answer bar always changes the ending of A');
+    assert(contrasts / forms > 0.95, 'The B bar contrasts with A: ' + contrasts + '/' + forms);
     return { passed: assertions.length, assertions };
   };
 })(typeof window !== 'undefined' ? window : globalThis);

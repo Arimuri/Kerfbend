@@ -99,49 +99,126 @@
 
   // A jump lands on a note that sat on the same part of the beat in the
   // source, so moved runs keep their original push or pull.
-  function noteAt(plan, position, draw) {
-    const notes = plan.notes.map(function (note, index) { return { note, index }; });
+  function noteAt(plan, position, draw, avoidBar) {
+    let notes = plan.notes.map(function (note, index) { return { note, index }; });
+    const elsewhere = notes.filter(function (entry) { return Math.floor(entry.note.step / 16) !== avoidBar; });
+    if (avoidBar != null && elsewhere.length) notes = elsewhere;
     const beat = notes.filter(function (entry) { return Number.isInteger(entry.note.step) && entry.note.step % 4 === position % 4; });
     const parity = notes.filter(function (entry) { return Number.isInteger(entry.note.step) && entry.note.step % 2 === position % 2; });
     const pool = beat.length ? beat : parity.length ? parity : notes;
     return pool[Math.floor(draw * pool.length)].index;
   }
 
-  function noteMotif(lane, settings, random, plan, motifSteps) {
-    const scatter = 0.45;
-    const motion = settings.motion / 100;
-    const octaveProbability = settings.octave / 100;
-    const density = settings.density / 100;
-    const stepSeconds = 60 / settings.bpm / 4;
-    const group = noteGroup(settings.size);
-    const motif = [];
-    let previous = null;
-    let busyUntil = 0;
-    for (let bar = 0; bar < motifSteps / 16; bar += 1) {
-      const rhythm = rhythms[Math.floor(random() * rhythms.length)];
-      rhythm.forEach(function (position) {
-        const step = bar * 16 + position;
-        const anchor = position === 0 || position === 8;
-        // Draw everything first so OCTAVE and MOTION never shift other choices.
-        const keep = random() < Math.min(1, density * (anchor ? 1.25 : 0.92));
-        const jump = random();
-        const pick = random();
-        const size = random();
-        const semitones = octave(random, octaveProbability);
-        const reverse = random() < motion * 0.19;
-        const velocity = Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3));
-        // A run keeps sounding until its last note ends.
-        if (step < busyUntil || !(keep || step === 0)) return;
-        const first = !previous || jump < scatter * 0.7
-          ? noteAt(plan, position, pick)
-          : (previous.sliceIndex + previous.segmentCount) % plan.notes.length;
-        const cut = noteCut(plan, first, group[0] + Math.floor(size * (group[1] - group[0] + 1)), stepSeconds);
-        motif.push(Object.assign({ laneId: lane.id, step }, cut, { semitones, reverse, velocity }));
-        previous = cut;
-        busyUntil = step + cut.durationSteps;
-      });
-    }
-    return motif;
+  // Lanes build one-bar units and lay them out as a small form, so a phrase
+  // returns recognisably: A, A with a new ending, a contrasting B, then A.
+  const ENDING = 12;
+
+  function formUnit(bar, bars) {
+    if (bars >= 8 && bar === bars - 1) return 'A2';
+    const unit = ['A', 'A2', 'B', 'A'][bar % 4];
+    return unit === 'B' && Math.floor(bar / 4) % 2 ? 'B2' : unit;
+  }
+
+  function otherRhythm(random, index) {
+    return (index + 1 + Math.floor(random() * (rhythms.length - 1))) % rhythms.length;
+  }
+
+  // The answer keeps the first three beats and replaces only the last beat.
+  function withEnding(events, ending) {
+    return events.filter(function (event) { return event.step < ENDING; }).map(function (event) {
+      return Object.assign({}, event, { durationSteps: Math.min(event.durationSteps, ENDING - event.step) });
+    }).concat(ending.events.length ? ending.events : ending.first ? [ending.first] : []);
+  }
+
+  function sliceUnit(context, rhythm, from, slice, force) {
+    const settings = context.settings;
+    const random = context.random;
+    const events = [];
+    let first = null;
+    rhythm.forEach(function (position) {
+      if (position < from) return;
+      // Beat one and beat three supply an anchor; the other cuts leave more room.
+      const anchor = position === 0 || position === 8;
+      const keep = random() < Math.min(1, context.density * (anchor ? 1.25 : 0.92));
+      if (random() < context.scatter * 0.7) slice = Math.floor(random() * settings.chop);
+      else slice = (slice + (random() < 0.26 ? 0 : 1)) % settings.chop;
+      const event = {
+        laneId: context.lane.id,
+        step: position,
+        sliceIndex: slice,
+        startRatio: slice / settings.chop,
+        sourceChop: settings.chop,
+        durationSteps: context.minimumLength + Math.floor(random() * (context.maximumLength - context.minimumLength + 1)),
+        semitones: octave(random, context.octave),
+        reverse: random() < context.motion * 0.19,
+        velocity: Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3)),
+      };
+      if (!first) first = event;
+      if (keep || position === force) events.push(event);
+    });
+    return { events, slice, first };
+  }
+
+  function sliceUnits(context) {
+    const random = context.random;
+    const chop = context.settings.chop;
+    const rhythmA = Math.floor(random() * rhythms.length);
+    const start = Math.floor(random() * chop);
+    const a = sliceUnit(context, rhythms[rhythmA], 0, start, 0);
+    const answer = sliceUnit(context, rhythms[otherRhythm(random, rhythmA)], ENDING, a.slice, null);
+    // B takes another rhythm from the other half of the source.
+    const rhythmB = otherRhythm(random, rhythmA);
+    const b = sliceUnit(context, rhythms[rhythmB], 0, (start + Math.floor(chop / 2)) % chop, null);
+    const turn = sliceUnit(context, rhythms[otherRhythm(random, rhythmB)], ENDING, b.slice, null);
+    return { A: a.events, A2: withEnding(a.events, answer), B: b.events, B2: withEnding(b.events, turn) };
+  }
+
+  function noteUnit(context, rhythm, from, state, force, avoidBar) {
+    const random = context.random;
+    const plan = context.plan;
+    const events = [];
+    let first = null;
+    rhythm.forEach(function (position) {
+      if (position < from) return;
+      const anchor = position === 0 || position === 8;
+      // Draw everything first so OCTAVE and MOTION never shift other choices.
+      const keep = random() < Math.min(1, context.density * (anchor ? 1.25 : 0.92));
+      const jump = random();
+      const pick = random();
+      const size = random();
+      const semitones = octave(random, context.octave);
+      const reverse = random() < context.motion * 0.19;
+      const velocity = Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3));
+      // A run keeps sounding until its last note ends.
+      if (position < state.busyUntil) return;
+      const start = !state.previous || jump < context.scatter * 0.7
+        ? noteAt(plan, position, pick, state.previous ? null : avoidBar)
+        : (state.previous.sliceIndex + state.previous.segmentCount) % plan.notes.length;
+      const cut = noteCut(plan, start, context.group[0] + Math.floor(size * (context.group[1] - context.group[0] + 1)), context.stepSeconds);
+      const event = Object.assign({ laneId: context.lane.id, step: position }, cut, { semitones, reverse, velocity });
+      if (!first) first = event;
+      if (!(keep || position === force)) return;
+      events.push(event);
+      state.previous = event;
+      state.busyUntil = position + event.durationSteps;
+    });
+    return { events, first };
+  }
+
+  function noteUnits(context) {
+    const random = context.random;
+    const lastBefore = function (events) {
+      return events.filter(function (event) { return event.step < ENDING; }).pop() || null;
+    };
+    const rhythmA = Math.floor(random() * rhythms.length);
+    const a = noteUnit(context, rhythms[rhythmA], 0, { previous: null, busyUntil: 0 }, 0, null);
+    const answer = noteUnit(context, rhythms[otherRhythm(random, rhythmA)], ENDING, { previous: lastBefore(a.events), busyUntil: ENDING }, null, null);
+    // B opens with notes from another bar of the source phrase.
+    const rhythmB = otherRhythm(random, rhythmA);
+    const opening = a.events.length ? Math.floor(context.plan.notes[a.events[0].sliceIndex].step / 16) : null;
+    const b = noteUnit(context, rhythms[rhythmB], 0, { previous: null, busyUntil: 0 }, null, Number.isInteger(opening) ? opening : null);
+    const turn = noteUnit(context, rhythms[otherRhythm(random, rhythmB)], ENDING, { previous: lastBefore(b.events), busyUntil: ENDING }, null, null);
+    return { A: a.events, A2: withEnding(a.events, answer), B: b.events, B2: withEnding(b.events, turn) };
   }
 
   function lockedEvents(lane, totalSteps) {
@@ -160,64 +237,20 @@
     if (lane.locked && Array.isArray(lane.events)) return lockedEvents(lane, totalSteps);
     if (settings.density === 0) return [];
 
-    const random = randomFor(seed, lane.id);
-    const scatter = 0.45;
-    const motion = settings.motion / 100;
-    const octaveProbability = settings.octave / 100;
-    const density = settings.density / 100;
-    const minimumLength = 1 + Math.floor(settings.size / 50);
-    const maximumLength = 1 + Math.round(settings.size * 0.03);
-    const motifSteps = Math.min(totalSteps, 32);
-    const notes = segmentPlan(lane);
-    const motif = notes ? noteMotif(lane, settings, random, notes, motifSteps) : [];
-    let slice = notes ? 0 : Math.floor(random() * settings.chop);
-
-    for (let bar = 0; !notes && bar < motifSteps / 16; bar += 1) {
-      const rhythm = rhythms[Math.floor(random() * rhythms.length)];
-      rhythm.forEach(function (position) {
-        // Beat one and beat three supply an anchor; the other cuts leave more room.
-        const anchor = position === 0 || position === 8;
-        const keep = random() < Math.min(1, density * (anchor ? 1.25 : 0.92));
-        const jump = random();
-        if (jump < scatter * 0.7) {
-          slice = Math.floor(random() * settings.chop);
-        } else {
-          slice = (slice + (random() < 0.26 ? 0 : 1)) % settings.chop;
-        }
-        const event = {
-          laneId: lane.id,
-          step: bar * 16 + position,
-          sliceIndex: slice,
-          startRatio: slice / settings.chop,
-          sourceChop: settings.chop,
-          durationSteps: minimumLength + Math.floor(random() * (maximumLength - minimumLength + 1)),
-          semitones: octave(random, octaveProbability),
-          reverse: random() < motion * 0.19,
-          velocity: Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3)),
-        };
-        if (keep || (bar === 0 && position === 0)) motif.push(event);
-      });
-    }
-
+    const plan = segmentPlan(lane);
+    const context = {
+      lane, settings, plan, random: randomFor(seed, lane.id), scatter: 0.45,
+      motion: settings.motion / 100, octave: settings.octave / 100, density: settings.density / 100,
+      minimumLength: 1 + Math.floor(settings.size / 50), maximumLength: 1 + Math.round(settings.size * 0.03),
+      stepSeconds: 60 / settings.bpm / 4, group: noteGroup(settings.size),
+    };
+    // Every unit is drawn whatever the length, so A and its answer stay the
+    // same when the loop grows from 2 to 4 or 8 bars.
+    const units = plan ? noteUnits(context) : sliceUnits(context);
     const events = [];
-    for (let cycle = 0; cycle * motifSteps < totalSteps; cycle += 1) {
-      motif.forEach(function (original) {
-        const event = Object.assign({}, original, { step: original.step + cycle * motifSteps });
-        if (event.step >= totalSteps) return;
-        // The opening bar of each repeated motif stays recognizable. Change the answer.
-        const answer = cycle > 0 && original.step >= 16;
-        if (answer && random() < scatter * 0.23) {
-          if (notes) {
-            const first = noteAt(notes, event.step % 16, random());
-            Object.assign(event, noteCut(notes, first, event.segmentCount, 60 / settings.bpm / 4));
-          } else {
-            event.sliceIndex = Math.floor(random() * settings.chop);
-            event.startRatio = event.sliceIndex / settings.chop;
-          }
-          event.semitones = octave(random, octaveProbability);
-          event.reverse = random() < motion * 0.19;
-        }
-        events.push(event);
+    for (let bar = 0; bar < settings.bars; bar += 1) {
+      units[formUnit(bar, settings.bars)].forEach(function (event) {
+        events.push(Object.assign({}, event, { step: event.step + bar * 16 }));
       });
     }
 

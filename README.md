@@ -51,7 +51,7 @@ For imported sources, key information is prioritized as **manual override → fi
 - Up to 16 sources, 2/4/8 bars, 40–200 BPM, and swing.
 - Up to 40 MB and 120 seconds per file, with 240 seconds of source audio in total. Supported formats depend on the browser's decoder. WAV and MP3 are generally straightforward; formats such as AIFF may not load in every environment.
 - The same sources, lane IDs, settings, and SEED produce the same arrangement. Locked lanes retain their previous arrangement.
-- One- or two-bar motifs repeat with small variations later in the phrase. Imported and demo sources are divided into equal slices, with short fades to reduce clicks; FM sources are cut into runs of whole notes.
+- Each lane builds one-bar phrases and arranges them as A → A′ → B → A: A′ keeps the first three beats of A and replaces its last beat, and B is a contrasting bar with another rhythm from another part of the source. Two-bar loops play A → A′; eight-bar loops repeat the form, vary the ending of the second B, and close on A′. Imported and demo sources are divided into equal slices, with short fades to reduce clicks; FM sources are cut into runs of whole notes.
 - Adjustments redraw and re-render the phrase. If playback is active, it restarts from the beginning of the loop. Playback and WAV export use the same audio buffer.
 - Tempo, swing, mixer, and key-sync changes also affect locked lanes. Shortening the loop removes events outside its new range and trims its end.
 - Pitch combines key-sync correction, `octave` shifts of ±1 octave, and `PITCH ENV` changes at the start of each slice. Pitch changes also affect playback speed. Independent time-stretching and transient detection are not implemented.
