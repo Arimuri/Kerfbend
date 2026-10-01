@@ -109,6 +109,11 @@
     return null;
   }
 
+  // Imported and generated sources lead demos, as in key alignment.
+  function isUserLane(lane) {
+    return !lane.kind || lane.kind === 'upload' || lane.kind === 'fm';
+  }
+
   // Manual roles win; drums keep their own role; then one bass and one lead
   // are chosen automatically and every other part answers the lead.
   function roles(lanes) {
@@ -120,15 +125,23 @@
     });
     const open = list.filter(function (lane) { return !result[lane.id]; });
     const has = function (role) { return list.some(function (lane) { return result[lane.id] === role; }); };
+    const pick = function (candidates, rank) {
+      return candidates.slice().sort(function (first, second) {
+        return rank(first) - rank(second) || list.indexOf(first) - list.indexOf(second);
+      })[0];
+    };
     if (!has('bass')) {
       // A low FM phrase knows its notes and chords, so it makes the better bass.
-      const hinted = open.filter(function (lane) { return roleHint(lane) === 'bass'; });
-      const bass = hinted.find(function (lane) { return lane.kind === 'fm'; }) || hinted[0];
+      const bass = pick(open.filter(function (lane) { return roleHint(lane) === 'bass'; }), function (lane) {
+        return (isUserLane(lane) ? 0 : 2) + (lane.kind === 'fm' ? 0 : 1);
+      });
       if (bass) result[bass.id] = 'bass';
     }
     if (!has('lead')) {
-      const free = open.filter(function (lane) { return !result[lane.id]; });
-      const lead = free.find(function (lane) { return roleHint(lane) === 'lead'; }) || free[0];
+      // Named leads first, user material before demos.
+      const lead = pick(open.filter(function (lane) { return !result[lane.id]; }), function (lane) {
+        return (isUserLane(lane) ? 0 : 2) + (roleHint(lane) === 'lead' ? 0 : 1);
+      });
       if (lead) result[lead.id] = 'lead';
     }
     open.forEach(function (lane) { if (!result[lane.id]) result[lane.id] = 'fill'; });
@@ -562,5 +575,10 @@
     return phrasePlan(normalize(settings), seed);
   }
 
-  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames, phraseEnds });
+  // The form letter a bar plays: A, A′ (A with a new ending), B or B′.
+  function formLabel(bar, bars) {
+    return { A: 'A', A2: 'A′', B: 'B', B2: 'B′' }[formUnit(bar, Math.round(bounded(bars, defaults.bars, 1, 16)))];
+  }
+
+  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames, phraseEnds, formLabel });
 })(typeof window !== 'undefined' ? window : globalThis);

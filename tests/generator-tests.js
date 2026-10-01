@@ -215,6 +215,16 @@
     assert(named.a === 'fill' && named.b === 'fill' && named.c === 'lead' && named.d === 'fill' && named.e === 'bass', 'Names pick one bass (a low FM phrase first) and one lead; other parts answer: ' + JSON.stringify(named));
     assert(generator.roles([{ id: 'b', filename: '808_sub_C1.wav' }, { id: 'd', kind: 'fm', synthSettings: { octave: 4 } }]).b === 'bass', 'Without a low FM phrase a named bass plays bass');
     assert(generator.roles([{ id: 'x' }, { id: 'y' }]).x === 'lead' && generator.roles([{ id: 'x' }, { id: 'y' }]).y === 'fill', 'Without hints the first part leads');
+    const withUploads = generator.roles(band.concat([
+      { id: 'chop', kind: 'upload', filename: 'vocal_chop_F#min.wav' }, { id: 'loop', kind: 'upload', filename: 'loop.wav' },
+      { id: 'fmbass', kind: 'fm', synthSettings: { octave: 2 } }
+    ]));
+    assert(withUploads.chop === 'lead' && withUploads.vox === 'fill' && withUploads.fmbass === 'bass' && withUploads.low === 'fill' && withUploads.loop === 'fill',
+      'Imported and generated sources take the lead and bass before demos: ' + JSON.stringify(withUploads));
+    assert(generator.roles(band.concat([{ id: 'loop', kind: 'upload', filename: 'loop.wav' }])).loop === 'lead', 'An imported source leads before the demo voice even without a name hint');
+    assert([1, 2, 4, 8].map(function (bars) {
+      return Array.from({ length: bars }, function (_, bar) { return generator.formLabel(bar, bars); }).join(' ');
+    }).join(' | ') === 'A | A A′ | A A′ B A | A A′ B A A A′ B′ A′', 'Form labels name every bar');
     const manual = generator.roles([Object.assign({}, band[0], { role: 'fill' }), Object.assign({}, band[1], { role: 'lead' }), band[2], Object.assign({}, band[3], { role: 'bass' })]);
     assert(manual.vox === 'fill' && manual.pad === 'lead' && manual.low === 'fill' && manual.kit === 'bass', 'Manual roles override names, categories and the automatic picks: ' + JSON.stringify(manual));
     assert(JSON.stringify(generator.roles(band.map(function (lane) { return Object.assign({ muted: true, solo: true, volume: 0, locked: true }, lane); }))) === JSON.stringify(auto), 'Mixer state and locks never change roles');

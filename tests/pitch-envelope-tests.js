@@ -175,6 +175,18 @@
       assert(values[0] === 500 ? times.every(function (time) { return time <= 0.5; }) : times.every(function (time) { return time >= 0.005; }),
         'Randomized return time stays within the 5–500 ms control range at ' + values[0] + ' ms');
     });
+    const formSettings = { pitchEnvDepth: 12, pitchEnvTime: 80, pitchEnvDepthRandom: 100, pitchEnvTimeRandom: 100, pitchEnvChance: 50 };
+    assert(slices.slice(0, 300).every(function (slice) {
+      const first = envelope.create(1, slice, formSettings);
+      const repeat = envelope.create(1, Object.assign({}, slice, { step: slice.step + 48 }), formSettings);
+      return first.enabled === repeat.enabled && first.depth === repeat.depth && first.decaySeconds === repeat.decaySeconds;
+    }), 'A slice repeated three bars later bends exactly the same way');
+    const rerolled = slices.map(function (slice) { return envelope.create(1, slice, Object.assign({ pitchEnvSeed: 'k3x9' }, formSettings)); });
+    const original = slices.map(function (slice) { return envelope.create(1, slice, formSettings); });
+    assert(JSON.stringify(original.map(function (curve) { return curve.depth; })) === JSON.stringify(slices.map(function (slice) { return envelope.create(1, slice, Object.assign({ pitchEnvSeed: '' }, formSettings)).depth; })) &&
+      rerolled.filter(function (curve, index) { return curve.depth !== original[index].depth; }).length > 400 &&
+      Math.abs(rerolled.filter(function (curve) { return curve.enabled; }).length / rerolled.length - 0.5) < 0.05,
+    'A re-roll seed picks a new pattern with the same chance, and an empty seed keeps the original');
     const spreadSettings = { pitchEnvDepth: 12, pitchEnvTime: 80, pitchEnvDepthRandom: 70, pitchEnvTimeRandom: 70, pitchEnvChance: 60 };
     const spreadCurve = envelope.create(1, slices[7], spreadSettings);
     assert(controls.every(function (change) {

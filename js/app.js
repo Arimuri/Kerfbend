@@ -9,7 +9,8 @@
   const MAX_SOURCES = 16;
   const MAX_TOTAL_SECONDS = 240;
   const colors = ['#a7d1ff', '#d6bfff', '#e7e68c', '#ffb99f', '#9dd8c8', '#efb8d3', '#b7c6f5', '#ddc5a1'];
-  const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
+  const MAX_HISTORY = 30;
+  const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, pitchEnvSeed: '', keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
   const envelopeChances = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
   const roleLabels = { lead: '主役', bass: 'ベース', fill: '合いの手', drums: 'ドラム' };
   const progressionLabels = { I: '同じコード（I）', 'I-IV': '2コード往復（I–IV）', 'I-V': '2コード往復（I–V）', 'vi-IV': '2コード往復（vi–IV）', 'IV-V-iii-vi': '王道進行（IV–V–iii–vi）', 'vi-IV-V-I': '小室進行（vi–IV–V–I）' };
@@ -68,7 +69,7 @@
 
   function remember() {
     history.push(snapshot());
-    if (history.length > 12) history.shift();
+    if (history.length > MAX_HISTORY) history.shift();
     $('undo-button').disabled = false;
   }
 
@@ -78,8 +79,18 @@
 
   function regenerateEvents() {
     const events = generator.generate(state.lanes, state.settings, state.seed);
-    state.lanes.forEach((lane) => { lane.events = events.filter((event) => event.laneId === lane.id); });
+    // Lanes show the role their current phrase was built with; removing a
+    // source or changing a category keeps the arrangement until it is rebuilt.
+    const parts = generator.roles(state.lanes);
+    state.lanes.forEach((lane) => {
+      lane.events = events.filter((event) => event.laneId === lane.id);
+      if (!lane.locked || !lane.playedRole) lane.playedRole = parts[lane.id];
+    });
     getEvents();
+  }
+
+  function playedRole(lane, parts) {
+    return lane.playedRole || parts[lane.id];
   }
 
   function updateButtons() {
@@ -97,6 +108,7 @@
     $('max-voices').disabled = importing;
     $('max-drum-voices').disabled = importing;
     ['pitch-env-depth', 'pitch-env-time', 'pitch-env-depth-random', 'pitch-env-time-random'].forEach((id) => { $(id).disabled = importing; });
+    $('pitch-env-reroll').disabled = importing || !state.settings.pitchEnvDepth;
     document.querySelectorAll('.source-key, .source-category, .source-role, .pitch-envelope-lane select').forEach((select) => { select.disabled = importing; });
     document.body.classList.toggle('busy', rendering || importing);
     document.body.classList.toggle('playing', playing);
@@ -203,6 +215,12 @@
     // The faint pair marks the smallest, fastest end of the per-slice spread.
     draw('-range', depth && (depthSpread || timeSpread) ? depth * (1 - depthSpread / 100) : 0,
       milliseconds * Math.pow(4, -timeSpread / 100));
+    const lowest = Math.max(1, Math.round(depth * (1 - depthSpread / 100)));
+    const shortest = Math.max(5, Math.round(milliseconds * Math.pow(4, -timeSpread / 100)));
+    const longest = Math.min(500, Math.round(milliseconds * Math.pow(4, timeSpread / 100)));
+    $('pitch-env-depth-random-hint').textContent = !depthSpread || !depth ? '0%で全断片が同じ幅' : `断片ごとに ±${Math.min(lowest, depth)}〜${depth} st`;
+    $('pitch-env-time-random-hint').textContent = !timeSpread ? '0%で全断片が同じ時間' : `断片ごとに ${shortest}〜${longest} ms（断片内に戻る）`;
+    document.querySelector('.pitch-envelope-panel').classList.toggle('is-bypassed', !depth);
   }
 
   function pitchEnvelopeLanes() {
@@ -215,6 +233,30 @@
       list.append(empty);
       return;
     }
+    const chances = state.lanes.map(laneEnvelopeChance);
+    const shared = chances.every((chance) => chance === chances[0]) ? chances[0] : null;
+    const all = document.createElement('label');
+    all.className = 'pitch-envelope-lane is-all';
+    all.innerHTML = '<span>すべて</span><select class="pitch-envelope-chance-all"></select>';
+    const allSelect = all.querySelector('select');
+    [['', '—'], ...envelopeChances.map((chance) => [String(chance), chance ? `${chance}%` : 'OFF'])].forEach(([value, text]) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      allSelect.append(option);
+    });
+    allSelect.value = shared === null ? '' : String(shared);
+    allSelect.disabled = importing;
+    allSelect.setAttribute('aria-label', 'すべてのパートのPITCH ENV発生確率');
+    allSelect.addEventListener('change', () => {
+      const value = Number(allSelect.value);
+      if (importing || allSelect.value === '' || !envelopeChances.includes(value)) { allSelect.value = shared === null ? '' : String(shared); return; }
+      remember();
+      state.lanes.forEach((lane) => { lane.pitchEnvChance = value; });
+      updateView();
+      renderAudio();
+    });
+    list.append(all);
     categories.groups.flatMap((category) => state.lanes.filter((lane) => categories.get(lane) === category.id)).forEach((lane) => {
       const item = document.createElement('label');
       item.className = 'pitch-envelope-lane';
@@ -227,7 +269,7 @@
       envelopeChances.forEach((chance) => {
         const option = document.createElement('option');
         option.value = String(chance);
-        option.textContent = `${chance}%`;
+        option.textContent = chance ? `${chance}%` : 'OFF';
         select.append(option);
       });
       const current = laneEnvelopeChance(lane);
@@ -293,7 +335,8 @@
       const entry = keyPlan.byId[lane.id];
       const sourceName = { filename: 'ファイル名', analysis: '音声推定', manual: '手動', demo: 'デモ設定', synth: '合成設定' }[entry.key.source] || '未判定';
       const progression = lane.kind === 'fm' && lane.synthSettings ? ` ${(lane.synthSettings.progression || 'I').replace(/-/g, '–')}` : '';
-      const detail = `${lane.buffer.duration.toFixed(2)}s / ${lane.kind === 'upload' ? 'YOUR SOUND' : lane.kind === 'fm' ? `FM SYNTH${progression}` : 'SYNTH DEMO'} · ${sourceName}`;
+      const synthName = lane.synthSettings && lane.synthSettings.index ? 'FM SYNTH' : 'SINE SYNTH';
+      const detail = `${lane.buffer.duration.toFixed(2)}s / ${lane.kind === 'upload' ? 'YOUR SOUND' : lane.kind === 'fm' ? `${synthName}${progression}` : 'SYNTH DEMO'} · ${sourceName}`;
       row.querySelector('.source-detail').textContent = detail;
       row.querySelector('.source-detail').title = detail;
       const categorySelect = row.querySelector('.source-category');
@@ -325,11 +368,16 @@
         const value = generator.roleNames.includes(roleSelect.value) ? roleSelect.value : 'auto';
         if (value === (generator.roleNames.includes(lane.role) ? lane.role : 'auto')) return;
         remember();
+        const before = new Map(state.lanes.map((other) => [other.id, playedRole(other, generator.roles(state.lanes))]));
         lane.role = value;
         // Roles shape the composition, so unlocked lanes are rebuilt with the same SEED.
         regenerateEvents();
         updateView();
         renderAudio();
+        const moved = state.lanes.filter((other) => other !== lane && before.get(other.id) !== other.playedRole);
+        notify([`${lane.name}を${roleLabels[lane.playedRole]}にしました。`,
+          ...moved.map((other) => `${other.name}は自動で${roleLabels[other.playedRole]}になりました。`),
+          state.lanes.some((other) => other.locked) ? 'LOCK中のレーンは配置を保持します。' : '', '↶で戻せます。'].filter(Boolean).join(''), 6500);
       });
       const keySelect = row.querySelector('.source-key');
       const auto = document.createElement('option');
@@ -395,6 +443,10 @@
     for (let bar = 0; bar < state.settings.bars; bar++) {
       const label = document.createElement('span');
       label.textContent = String(bar + 1).padStart(2, '0');
+      const form = document.createElement('small');
+      form.textContent = generator.formLabel(bar, state.settings.bars);
+      label.append(form);
+      label.title = `${bar + 1}小節目：${form.textContent}`;
       $('bar-ruler').append(label);
     }
     const list = $('lane-list');
@@ -422,9 +474,10 @@
       row.innerHTML = '<div class="lane-info"><div class="lane-title"><span class="lane-number"></span><span class="lane-name"></span><span class="lane-role"></span></div><div class="lane-buttons"><button class="lane-button lock-button" type="button">LOCK</button><button class="lane-button mute-button" type="button">M</button><button class="lane-button solo-button" type="button">S</button><input class="lane-volume" type="range" min="0" max="100"></div></div><div class="lane-track"><canvas></canvas><div class="playhead"></div></div>';
       row.querySelector('.lane-number').textContent = String(index + 1).padStart(2, '0');
       row.querySelector('.lane-name').textContent = lane.name;
-      row.querySelector('.lane-role').textContent = roleLabels[parts[lane.id]] || '';
-      row.querySelector('.lane-role').dataset.role = parts[lane.id] || '';
-      row.querySelector('.lane-title').title = `${lane.name}（${roleLabels[parts[lane.id]] || ''}）`;
+      const role = playedRole(lane, parts);
+      row.querySelector('.lane-role').textContent = roleLabels[role] || '';
+      row.querySelector('.lane-role').dataset.role = role || '';
+      row.querySelector('.lane-title').title = `${lane.name}（${roleLabels[role] || ''}）`;
       const canvas = row.querySelector('canvas');
       const count = audible.filter((event) => event.laneId === lane.id).length;
       canvas.setAttribute('aria-label', `${lane.name}: ${count}個の発音 / ${lane.events.length}個の断片`);
@@ -656,7 +709,7 @@
     }
     if (added) {
       history.push(before);
-      if (history.length > 12) history.shift();
+      if (history.length > MAX_HISTORY) history.shift();
       regenerateEvents();
     }
     importing = false;
@@ -717,6 +770,8 @@
 
   function updateFMControls() {
     ['key', 'progression', 'octave', 'ratio', 'index', 'decay', 'density', 'seed', 'reroll', 'preview'].forEach((id) => { $(`fm-${id}`).disabled = fmBusy; });
+    // The modulator ratio only matters once there is some FM.
+    $('fm-ratio').disabled = fmBusy || Number($('fm-index').value) === 0;
     $('fm-add').disabled = fmBusy || !fmDraft || importing || !!fmCapacityError(fmDraft.buffer.duration);
     $('fm-preview').textContent = fmBusy ? '合成中…' : fmPreviewSource ? '■ 試聴を停止' : fmDraft ? '▶ 元フレーズを試聴' : '▶ 生成・試聴';
     $('fm-dialog').setAttribute('aria-busy', String(fmBusy));
@@ -743,9 +798,11 @@
     $('fm-length').textContent = `${options.bpm} BPM / ${options.bars} bars / ${duration.toFixed(2)} s`;
     $('fm-status').textContent = fmCapacityError(duration) || '「生成・試聴」で元のフレーズを確認できます。';
     const shared = sharedProgression();
+    const chordCount = window.BlueLoopFMSynth.progressions[options.progression].length;
     $('fm-progression-note').textContent = shared && shared !== options.progression
       ? `ループのコードは最初のFM素材（${progressionLabels[shared]}）に合わせて並べます`
-      : '1小節ごとにコードが変わり、拍の頭はコードの音になります';
+      : chordCount > options.bars ? `${options.bars}小節では最初の${options.bars}コードだけ鳴ります（${chordCount}小節以上で全部）`
+        : '1小節ごとにコードが変わり、拍の頭はコードの音になります';
     updateFMControls();
   }
 
@@ -914,6 +971,16 @@
       updateView();
       renderAudio();
     });
+  });
+  $('pitch-env-reroll').addEventListener('click', () => {
+    if (importing || !state.settings.pitchEnvDepth) return;
+    remember();
+    const value = new Uint32Array(1);
+    window.crypto.getRandomValues(value);
+    state.settings.pitchEnvSeed = value[0].toString(36);
+    updateView();
+    renderAudio();
+    notify('PITCH ENVのかかり方を選び直しました。フレーズはそのままです。');
   });
   $('seed').addEventListener('change', () => {
     if (importing) { syncSettings(); return; }
