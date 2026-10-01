@@ -69,7 +69,10 @@
     var stepSeconds = 60 / bpm / 4;
     var chop = clamp(Math.round(number(settings.chop, 16)), 1, 128);
     var swing = clamp(number(settings.swing, 0), 0, 50) / 100;
-    var rate = Math.pow(2, pitchSemitones(lane, event) / 12);
+    // A whole loop is stretched over its bars at the current tempo; it follows
+    // the tempo instead of key sync and octave shifts.
+    var loopBars = number(event.loopBars, 0);
+    var rate = loopBars > 0 ? clamp(lane.buffer.duration * bpm / (loopBars * 240), 1 / 16, 16) : Math.pow(2, pitchSemitones(lane, event) / 12);
     var eventChop = clamp(Math.round(number(event.sourceChop, chop)), 1, 128);
     var startRatio = event.startRatio == null
       ? clamp(number(event.sliceIndex, 0), 0, eventChop - 1) / eventChop

@@ -3,6 +3,7 @@
 
   const $ = (id) => document.getElementById(id);
   const generator = window.BlueLoopGenerator;
+  const loopLength = window.BlueLoopLength;
   const harmony = window.BlueLoopKeySync;
   const categories = window.BlueLoopSourceCategory;
   const engine = new window.BlueLoopAudio.Engine();
@@ -125,7 +126,7 @@
     $('pitch-env-reroll').disabled = importing || !state.settings.pitchEnvDepth;
     ['glitch-amount', 'glitch-size', 'glitch-crush'].forEach((id) => { $(id).disabled = importing; });
     $('glitch-reroll').disabled = importing || !state.settings.glitchAmount;
-    document.querySelectorAll('.source-key, .source-category, .source-role, .pitch-envelope-lane select, .lane-env-chance').forEach((select) => { select.disabled = importing; });
+    document.querySelectorAll('.source-key, .source-category, .source-role, .source-mode, .source-bars, .pitch-envelope-lane select, .lane-env-chance').forEach((select) => { select.disabled = importing; });
     document.body.classList.toggle('busy', rendering || importing);
     document.body.classList.toggle('playing', playing);
     $('play-button').classList.toggle('is-playing', playing);
@@ -333,7 +334,7 @@
       row.dataset.laneId = lane.id;
       row.dataset.category = categories.get(lane);
       row.style.setProperty('--lane-color', lane.color);
-      row.innerHTML = '<i class="source-color"></i><div><span class="source-title"></span><span class="source-detail"></span></div><button class="source-preview" type="button">▶</button><button class="source-remove" type="button">×</button><div class="source-controls"><label class="source-category-control">分類 <select class="source-category"><option value="other">その他</option><option value="drums">ドラム</option></select></label><label class="source-role-control">役割 <select class="source-role"></select></label></div><div class="source-tuning"><select class="source-key"></select><span class="key-shift"></span></div><span class="source-major-note"></span>';
+      row.innerHTML = '<i class="source-color"></i><div><span class="source-title"></span><span class="source-detail"></span></div><button class="source-preview" type="button">▶</button><button class="source-remove" type="button">×</button><div class="source-controls"><label class="source-category-control">分類 <select class="source-category"><option value="other">その他</option><option value="drums">ドラム</option></select></label><label class="source-role-control">役割 <select class="source-role"></select></label><label class="source-mode-control">使い方 <select class="source-mode"><option value="chop">刻む</option><option value="loop">ループのまま</option></select></label><label class="source-bars-control">長さ <select class="source-bars"></select></label></div><div class="source-tuning"><select class="source-key"></select><span class="key-shift"></span></div><span class="source-major-note"></span>';
       const filename = lane.filename || lane.name;
       row.querySelector('.source-title').textContent = filename;
       row.querySelector('.source-title').title = filename;
@@ -384,6 +385,48 @@
           ? `${lane.name}はLOCK中のため、解除して作り直すと${roleLabels[target]}になります。`
           : `${lane.name}を${roleLabels[lane.playedRole]}にしました。`,
         roleMoves(before, lane), state.lanes.some((other) => other.locked && other !== lane) ? 'LOCK中のレーンは配置を保持します。' : '', '↶で戻せます。'].filter(Boolean).join(''), 6500);
+      });
+      // Whole-loop mode plays the source unchopped, stretched over its bars.
+      const modeSelect = row.querySelector('.source-mode');
+      const barsSelect = row.querySelector('.source-bars');
+      const looping = lane.playMode === 'loop';
+      const estimated = loopLength.estimateBars(lane.buffer.duration, lane.filename || lane.name);
+      modeSelect.value = looping ? 'loop' : 'chop';
+      modeSelect.disabled = importing;
+      modeSelect.setAttribute('aria-label', `${lane.name} の使い方`);
+      row.querySelector('.source-bars-control').hidden = !looping;
+      [['auto', `自動（${estimated}小節）`], ...loopLength.barOptions.map((bars) => [String(bars), `${bars}小節`])].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        barsSelect.append(option);
+      });
+      barsSelect.value = lane.loopBarsManual ? String(lane.loopBars) : 'auto';
+      barsSelect.disabled = importing;
+      barsSelect.setAttribute('aria-label', `${lane.name} のループの長さ`);
+      if (looping) {
+        const bars = lane.loopBars || estimated;
+        const detailText = `${row.querySelector('.source-detail').textContent} · ${bars}小節ループ（元 ${Math.round(bars * 240 / lane.buffer.duration)} BPM → ${loopLength.rateFor(lane.buffer.duration, bars, state.settings.bpm).toFixed(2)}倍速）`;
+        row.querySelector('.source-detail').textContent = detailText;
+        row.querySelector('.source-detail').title = detailText;
+      }
+      modeSelect.addEventListener('change', () => {
+        if (importing || modeSelect.value === (looping ? 'loop' : 'chop')) return;
+        remember();
+        lane.playMode = modeSelect.value === 'loop' ? 'loop' : 'chop';
+        if (!lane.loopBars) lane.loopBars = estimated;
+        regenerateEvents();
+        updateView();
+        renderAudio();
+      });
+      barsSelect.addEventListener('change', () => {
+        if (importing) return;
+        remember();
+        lane.loopBarsManual = barsSelect.value !== 'auto';
+        lane.loopBars = lane.loopBarsManual ? Number(barsSelect.value) : estimated;
+        regenerateEvents();
+        updateView();
+        renderAudio();
       });
       const keySelect = row.querySelector('.source-key');
       const auto = document.createElement('option');
@@ -619,7 +662,7 @@
         if (!playback) return;
         const stepSeconds = 60 / state.settings.bpm / 4;
         const x = playback.start / stepSeconds * unit + 1;
-        const totalSemitones = window.BlueLoopAudio.pitchSemitones(lane, event);
+        const totalSemitones = event.loopBars ? 0 : window.BlueLoopAudio.pitchSemitones(lane, event);
         const noteSeconds = playback.duration;
         const w = Math.max(1, Math.min(noteSeconds / stepSeconds * unit - 1, width - x));
         const y = totalSemitones > 0 ? 9 : totalSemitones < 0 ? 25 : 17;
@@ -752,8 +795,10 @@
           detectedKey = { tonic: null, mode: 'unknown', status: 'uncertain', source: 'analysis', reason: '解析できませんでした。元のキーを手動で指定できます。' };
           errors.push(`${file.name}: キー解析を保留しました。音源は読み込めます。`);
         }
+        const category = categories.inferFilename(file.name);
         state.lanes.push({
-          id: `user-${++uploadNumber}`, name: file.name.replace(/\.[^.]+$/, ''), filename: file.name, kind: 'upload', category: categories.inferFilename(file.name),
+          id: `user-${++uploadNumber}`, name: file.name.replace(/\.[^.]+$/, ''), filename: file.name, kind: 'upload', category,
+          playMode: loopLength.prefersLoop(file.name, category) ? 'loop' : 'chop', loopBars: loopLength.estimateBars(buffer.duration, file.name),
           buffer, color: colors[state.lanes.length % colors.length], volume: .7,
           muted: false, solo: false, locked: false, events: [], pitchEnvChance: 100,
           detectedKey, keyOverride: 'auto', keyShift: 0,

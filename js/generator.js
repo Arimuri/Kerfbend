@@ -490,6 +490,28 @@
     });
   }
 
+  // A source in whole-loop mode plays from its top every loopBars bars. The
+  // shared rest silences it, and it resumes where it would have been.
+  function wholeLoop(lane, settings, ends) {
+    const bars = Math.max(1, Math.min(16, Math.round(Number(lane.loopBars) || 1)));
+    const span = bars * 16;
+    const total = settings.bars * 16;
+    const events = [];
+    for (let start = 0; start < total; start += span) {
+      const end = Math.min(total, start + span);
+      const rest = ends && ends.rest && ends.rest.start < end && ends.rest.end > start ? ends.rest : null;
+      const pieces = rest ? [[start, Math.max(start, rest.start)], [Math.min(end, rest.end), end]] : [[start, end]];
+      pieces.forEach(function (piece) {
+        if (piece[1] <= piece[0]) return;
+        events.push({
+          laneId: lane.id, step: piece[0], sliceIndex: 0, startRatio: (piece[0] - start) / span, lengthRatio: (piece[1] - piece[0]) / span,
+          sourceChop: 1, durationSteps: piece[1] - piece[0], semitones: 0, reverse: false, velocity: 0.85, loopBars: bars,
+        });
+      });
+    }
+    return events;
+  }
+
   function lockedEvents(lane, totalSteps) {
     return lane.events.filter(function (event) {
       return event && Number.isFinite(event.step) && event.step >= 0 && event.step < totalSteps;
@@ -520,6 +542,7 @@
     const totalSteps = settings.bars * 16;
     if (lane.locked && Array.isArray(lane.events)) return lockedEvents(lane, totalSteps);
     if (settings.density === 0) return [];
+    if (lane.playMode === 'loop') return wholeLoop(lane, settings, part && part.ends ? part.ends : phrasePlan(settings, seed));
 
     const plan = segmentPlan(lane);
     const role = part && roleStyles[part.role] ? part.role : 'lead';
@@ -567,7 +590,7 @@
     const ends = phrasePlan(params, seed);
     // A fill needs someone to play it: without drums the lead stutters, and
     // without a lead the drums roll.
-    const hasDrums = list.some(function (lane) { return parts[lane.id] === 'drums'; });
+    const hasDrums = list.some(function (lane) { return parts[lane.id] === 'drums' && lane.playMode !== 'loop'; });
     const hasLead = list.some(function (lane) { return parts[lane.id] === 'lead'; });
     ends.fills = ends.fills.map(function (fill) {
       const roll = fill.device !== 'stutter' && hasDrums;

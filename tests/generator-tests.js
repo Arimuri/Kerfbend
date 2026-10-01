@@ -489,6 +489,34 @@
         return event.step === without[index].step && event.velocity === without[index].velocity && event.semitones === without[index].semitones;
       }), 'Following chords changes which notes play, never the rhythm, octave or dynamics');
     }
+    const loopLane = { id: 'loop', kind: 'upload', category: 'drums', filename: 'drum_loop_100bpm.wav', playMode: 'loop', loopBars: 2 };
+    [1, 2, 4, 8].forEach(function (bars) {
+      [0, 15, 60].forEach(function (breaks) {
+        const loopSettings = Object.assign({}, settings, { bars, breaks });
+        const seed = 'LOOP-' + bars + '-' + breaks;
+        const events = generator.generate([loopLane], loopSettings, seed);
+        const rest = generator.phraseEnds(loopSettings, seed).rest;
+        const covered = new Uint8Array(bars * 16);
+        events.forEach(function (event) { for (let step = event.step; step < event.step + event.durationSteps; step += 1) covered[step] += 1; });
+        assert(events.every(function (event) {
+          const start = event.step - Math.round(event.startRatio * 32);
+          return event.loopBars === 2 && event.sliceIndex === 0 && event.semitones === 0 && !event.reverse && start % 32 === 0 &&
+            Math.abs(event.lengthRatio * 32 - event.durationSteps) < 1e-9 && event.startRatio + event.lengthRatio <= 1 + 1e-9;
+        }), 'Whole-loop events play the source from where the loop is at that step: ' + bars + ' bars / breaks ' + breaks);
+        assert(Array.from(covered).every(function (count, step) { return count === (rest && step >= rest.start && step < rest.end ? 0 : 1); }),
+          'A whole loop sounds once everywhere except the shared rest: ' + bars + ' bars / breaks ' + breaks);
+        assert(JSON.stringify(events) === JSON.stringify(generator.generate([loopLane], Object.assign({}, loopSettings, { bpm: 77, size: 0, motion: 100, octave: 100 }), seed)),
+          'Tempo, size, motion and octave never change a whole loop: ' + bars + ' bars / breaks ' + breaks);
+      });
+    });
+    const withLoop = generator.generate([band[0], loopLane], Object.assign({}, settings, { breaks: 15, density: 80 }), 'LOOP-FILL');
+    const loopFills = generator.phraseEnds(Object.assign({}, settings, { breaks: 15 }), 'LOOP-FILL').fills;
+    assert(loopFills.every(function (fill) {
+      return [0, 2, 3].every(function (offset) { return withLoop.some(function (event) { return event.laneId === 'vox' && event.step === fill.end - 4 + offset; }); });
+    }), 'A whole drum loop keeps playing through fills, so the lead stutters them');
+    assert(generator.generate([loopLane], Object.assign({}, settings, { density: 0 }), 'LOOP').length === 0, 'Density zero silences whole loops too');
+    const lockedLoop = Object.assign({}, loopLane, { locked: true, events: generator.generate([loopLane], settings, 'LOOP-LOCK') });
+    assert(JSON.stringify(generator.generate([lockedLoop], Object.assign({}, settings, { breaks: 90 }), 'OTHER')) === JSON.stringify(lockedLoop.events), 'A locked whole loop keeps its events');
     return { passed: assertions.length, assertions };
   };
 })(typeof window !== 'undefined' ? window : globalThis);

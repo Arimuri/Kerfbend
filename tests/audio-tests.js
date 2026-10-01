@@ -414,6 +414,35 @@
       }
       assert(mixed < 1e-5, 'The full mix must equal the untouched drums plus the glitched parts: ' + mixed);
     });
+    await test('Whole drum loops stretch over their bars at the loop tempo', async function () {
+      var seconds = 4.8;
+      var buffer = engine.context.createBuffer(1, Math.round(seconds * 44100), 44100);
+      var data = buffer.getChannelData(0);
+      for (var frame = 0; frame < data.length; frame++) data[frame] = 0.02 * Math.sin(frame / 9);
+      [0.25, 0.5].forEach(function (position) {
+        var at = Math.round(position * data.length);
+        for (var tick = 0; tick < 40; tick++) data[at + tick] = 0.6;
+      });
+      var lane = { id: 'loop', category: 'drums', buffer: buffer, volume: 1, keyShift: 7 };
+      var settings = { bpm: 120, bars: 2, chop: 16 };
+      var event = { laneId: 'loop', step: 0, sliceIndex: 0, startRatio: 0, lengthRatio: 1, sourceChop: 1, durationSteps: 32, velocity: 1, semitones: 12, loopBars: 2 };
+      var playback = global.BlueLoopAudio.eventPlayback(lane, event, settings);
+      assert(Math.abs(playback.rate - 1.2) < 1e-12 && Math.abs(playback.duration - 4) < 1e-9, 'A 100 BPM two-bar loop was not stretched to 120 BPM: ' + playback.rate + ' / ' + playback.duration);
+      var output = await engine.render([lane], settings, [event]);
+      var pcm = output.getChannelData(0);
+      function onsetNear(seconds) {
+        var from = Math.round((seconds - 0.01) * 44100);
+        for (var index = from; index < from + 0.02 * 44100; index++) if (Math.abs(pcm[index]) > 0.3) return true;
+        return false;
+      }
+      assert(onsetNear(1) && onsetNear(2) && !onsetNear(1.2) && !onsetNear(1.5), 'The loop\'s quarter and halfway hits did not land a quarter and halfway through the two bars');
+      var half = Object.assign({}, event, { step: 12, startRatio: 0.375, lengthRatio: 0.625, durationSteps: 20 });
+      var resumed = await engine.render([lane], settings, [half]);
+      var tail = resumed.getChannelData(0);
+      var found = false;
+      for (var index = Math.round(1.99 * 44100); index < Math.round(2.02 * 44100); index++) if (Math.abs(tail[index]) > 0.3) found = true;
+      assert(found, 'A loop resumed after a rest did not keep its place');
+    });
     await test('Pure-tone lanes release cut notes over their release time', async function () {
       var buffer = engine.context.createBuffer(1, 44100, 44100);
       buffer.getChannelData(0).fill(0.5);
