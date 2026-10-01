@@ -1,0 +1,31 @@
+{
+  "name": "fft.js",
+  "version": "4.0.4",
+  "license": "MIT",
+  "copyright": "Copyright Fedor Indutny, 2017.",
+  "repository": "https://github.com/indutny/fft.js",
+  "commit": "f8be92e1369f684da3e121e4c5b7fbcc8d50f868",
+  "retrieved": "2026-10-02",
+  "upstreamSource": {
+    "url": "https://raw.githubusercontent.com/indutny/fft.js/f8be92e1369f684da3e121e4c5b7fbcc8d50f868/lib/fft.js",
+    "sha256": "4092b92cec888377666265b724d676628d377d4d5f56b03b76d9c2c27fd061ea"
+  },
+  "licenseSource": {
+    "url": "https://raw.githubusercontent.com/indutny/fft.js/f8be92e1369f684da3e121e4c5b7fbcc8d50f868/README.md",
+    "section": "LICENSE",
+    "readmeSha256": "dd7933fd452711e011c19b38e37ec855f7e019fdf795aaafc113cf008d5bba22"
+  },
+  "files": {
+    "fft.js": "7130ee37338ee0767264c3eea33f7671d74ad55e29bb52fa661c14f5bcb5e672",
+    "LICENSE": "133ae6ce7be357913d7cd6eb4e80384cae0091d0349b7935e314b44a5b029de9"
+  },
+  "modifications": [
+    "Prepended MIT notice in full.",
+    "Wrapped unchanged upstream CommonJS source in an IIFE with a local module object.",
+    "Exported the constructor as globalThis.KerfbendFFT (window in browsers)."
+  ],
+  "sourceMarkers": {
+    "begin": "// BEGIN UNMODIFIED UPSTREAM lib/fft.js\n",
+    "end": "// END UNMODIFIED UPSTREAM lib/fft.js\n"
+  }
+}

@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+._*
+
+# Local editor settings
+/.vscode/
+
+# Local credentials
+.env
+.env.*
+!.env.example
+
+# Dependencies and caches
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local audio exports and test artifacts
+/exports/
+/test-results/
+/playwright-report/

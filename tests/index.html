@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kerfbend / tests</title><style>body{font:14px ui-monospace,monospace;margin:40px;background:#f8f8f4;color:#202c45}pre{white-space:pre-wrap;line-height:1.6}button{padding:12px 20px}</style></head>
+<body><h1>Kerfbend / tests</h1><p>音声は再生しません。ブラウザの音声処理・キー解析と生成ルールを検証します。</p><button id="run">Run tests</button><pre id="result">準備完了</pre><script src="../js/source-category.js"></script><script src="source-category-tests.js"></script><script src="../js/generator.js"></script><script src="../js/playback-plan.js"></script><script src="../js/audio-engine.js"></script><script src="../js/filename-key.js"></script><script src="../vendor/fft.js/fft.js"></script><script src="../js/key-analysis.js"></script><script src="../js/key-sync.js"></script><script src="generator-tests.js"></script><script src="playback-plan-tests.js"></script><script src="audio-tests.js"></script><script src="filename-key-tests.js"></script><script src="fft-tests.js"></script><script src="key-analysis-tests.js"></script><script src="key-sync-tests.js"></script><script>
+document.getElementById('run').onclick = async function () {
+  this.disabled = true;
+  document.getElementById('result').textContent = 'Running…';
+  try {
+    const categories = runSourceCategoryTests();
+    const generator = runGeneratorTests();
+    const playback = runPlaybackPlanTests();
+    const audio = await runAudioTests();
+    const filenames = runFilenameKeyTests();
+    const fft = runFFTTests();
+    const analysis = await runKeyAnalysisTests();
+    const sync = await runKeySyncTests();
+    document.getElementById('result').textContent = JSON.stringify({ categories, generator, playback, audio, filenames, fft, analysis, sync }, null, 2);
+  } catch (error) { document.getElementById('result').textContent = error.stack; }
+  finally { this.disabled = false; }
+};
+</script></body></html>

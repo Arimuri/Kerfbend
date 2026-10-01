@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ライセンス・出典 — Kerfbend</title>
+  <style>body{max-width:760px;margin:40px auto;padding:0 24px;font:15px/1.8 system-ui,sans-serif;color:#202c45;background:#fafbf9}h1{font-size:26px}h2{font-size:19px;margin-top:32px}a{color:#244ce5;overflow-wrap:anywhere}p{overflow-wrap:anywhere}small{color:#68758b}</style>
+</head>
+<body>
+  <a href="index.html">← Kerfbendに戻る</a>
+  <h1>ライセンス・出典</h1>
+  <p>同梱した実装・数値表と、参考にした資料を記載しています。固定バージョン、変更点、出典の詳細は <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a> にあります。</p>
+  <h2>fft.js 4.0.4</h2>
+  <p>音声解析のFFTに <a href="https://github.com/indutny/fft.js/tree/v4.0.4">fft.js</a> を使用しています。MIT License。Copyright Fedor Indutny, 2017.</p>
+  <p><a href="vendor/fft.js/LICENSE">MITライセンス全文</a> · <a href="vendor/fft.js/provenance.json">固定コミット・ハッシュ・変更点</a></p>
+  <h2>Krumhansl–Kessler profiles / Partitura</h2>
+  <p>キー判定には <a href="https://github.com/CPJKU/partitura/blob/fc3e42a02ab6877e65d8482ea51b06361a4830f0/partitura/musicanalysis/key_identification.py">Partitura v1.2.1掲載の長調・短調プロファイル</a> の数値表を使用しています。Pythonの配列からJavaScriptの配列に転記し、数値は変更していません。</p>
+  <p>Copyright 2022, Maarten Grachten, Carlos Cancino-Chacón, Silvan Peter, Emmanouil Karystinaios, Francesco Foscarin</p>
+  <p><a href="licenses/partitura-Apache-2.0.txt">Apache License 2.0 全文</a></p>
+  <h2>Mulberry32</h2>
+  <p>フレーズ生成とデモの合成に使用する乱数方式です。Tommy Ettingerの原実装はCC0、brycのJavaScript実装はPublic domainとして公開されています。出典とアプリでの使用範囲は <a href="THIRD_PARTY_NOTICES.md#mulberry32">第三者表示</a> に記載しています。</p>
+  <h2>参考資料</h2>
+  <p><a href="https://essentia.upf.edu/reference/std_HPCP.html">EssentiaのHPCP</a>・<a href="https://essentia.upf.edu/reference/std_Key.html">Key</a> の説明を音声解析方式の参考にしています。Essentiaのライブラリは使用していません。処理方式は <a href="docs/reference-algorithms.md">実装の説明</a> に記載しています。</p>
+  <p><small>第三者のライセンスは各項目の対象に適用されます。参照先による公認や、アプリ全体への利用許諾を示すものではありません。</small></p>
+</body>
+</html>

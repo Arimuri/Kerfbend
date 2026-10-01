@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#244ce5">
+  <title>Kerfbend — in the blue shirt</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="js/generator.js" defer></script>
+  <script src="js/filename-key.js" defer></script>
+  <script src="vendor/fft.js/fft.js" defer></script>
+  <script src="js/key-analysis.js" defer></script>
+  <script src="js/key-sync.js" defer></script>
+  <script src="js/source-category.js" defer></script>
+  <script src="js/playback-plan.js" defer></script>
+  <script src="js/audio-engine.js" defer></script>
+  <script src="js/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="masthead">
+      <a class="brand" href="#app-title" aria-label="Kerfbend ホーム">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="m10 5-8 5 4 8 5-2v12h10V16l5 2 4-8-8-5c-1 5-11 5-12 0Z"/></svg>
+      </a>
+      <div class="masthead-right"><button class="text-button" id="help-button">使い方 <span aria-hidden="true">↗</span></button></div>
+    </header>
+
+    <section class="intro" aria-labelledby="app-title">
+      <div class="title-line"><h1 id="app-title">Kerfbend</h1><span class="prototype-tag">PROTOTYPE</span></div>
+    </section>
+
+    <main class="instrument" aria-label="ループ生成ワークスペース">
+      <section class="transport" aria-label="再生コントロール">
+        <button id="play-button" class="play-button" disabled><span id="play-icon" aria-hidden="true">▶</span><span id="play-label">再生</span><kbd>SPACE</kbd></button>
+        <div class="tempo-control"><label for="bpm">TEMPO</label><div><input id="bpm" type="number" min="40" max="200" step="1" value="120"><span>BPM</span></div></div>
+        <div class="length-control"><label for="bars">LENGTH</label><select id="bars"><option value="2">2 bars</option><option value="4" selected>4 bars</option><option value="8">8 bars</option></select></div>
+        <div class="transport-position"><span id="position">01 : 01</span><small id="duration">8.00 SEC / LOOP</small></div>
+        <div class="transport-actions"><button id="undo-button" class="icon-button" title="元に戻す (⌘/Ctrl + Z)" aria-label="元に戻す" disabled>↶</button><button id="generate-button" class="generate-button" disabled><span aria-hidden="true">⤨</span> 新しいフレーズ <kbd>R</kbd></button></div>
+      </section>
+
+      <section class="harmony-panel" aria-label="自動キー合わせ">
+        <label class="key-sync-toggle"><input id="key-sync" type="checkbox" checked><span>KEY SYNC<small>キーを自動で合わせる</small></span></label>
+        <label class="target-key-control" for="target-key">合わせ先 <select id="target-key"><option value="auto">自動で選ぶ</option></select></label>
+        <div class="resolved-key"><strong id="resolved-key">—</strong><span id="key-anchor">基準を選択中</span></div>
+        <span class="harmony-hint">すべてメジャーキー基準で処理<br>マイナーは平行調に読み替えます</span>
+      </section>
+
+      <section class="playback-settings" aria-label="生成後の調整">
+        <label for="max-voices">その他 同時発音数 <select id="max-voices"><option value="1">1個</option><option value="2">2個</option><option value="3">3個</option><option value="4">4個</option><option value="5">5個</option><option value="6">6個</option><option value="7">7個</option><option value="8" selected>8個</option></select></label>
+        <label for="max-drum-voices">ドラム 同時発音数 <select id="max-drum-voices"><option value="1">1個</option><option value="2">2個</option><option value="3">3個</option><option value="4">4個</option><option value="5">5個</option><option value="6">6個</option><option value="7">7個</option><option value="8" selected>8個</option></select></label>
+        <span id="playback-hint">種類ごとに上限を設定。素材と配置は保持します</span>
+      </section>
+
+      <div class="workbench">
+        <aside class="source-panel" aria-label="素材">
+          <div class="section-heading"><h2><span>01</span> SOURCES</h2><span id="source-count">0 / 8</span></div>
+          <div class="drop-zone" id="drop-zone">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4v16m-6-6 6 6 6-6M6 22v6h20v-6"/></svg>
+            <strong>音源をドロップ</strong><span>または、クリックして選択</span><small>WAV / MP3 / M4A など</small>
+            <input type="file" id="file-input" aria-label="音源ファイルを追加" accept="audio/*,.wav,.mp3,.m4a,.aif,.aiff,.ogg,.flac" multiple>
+          </div>
+          <div class="source-list" id="source-list"></div>
+          <button class="text-button demo-button" id="demo-button">＋ デモ音源を追加</button>
+          <p class="local-note"><span class="status-dot"></span>音源はこのブラウザ内で処理します</p>
+        </aside>
+
+        <section class="phrase-panel" aria-label="生成されたフレーズ">
+          <div class="section-heading phrase-heading"><h2><span>02</span> PHRASE</h2><div class="phrase-heading-right"><span class="live-label" id="live-label">READY TO PLAY</span><span class="loop-symbol" aria-hidden="true">↻</span></div></div>
+          <div class="sequence-scroll"><div class="sequence" id="sequence"><div class="ruler-row"><span class="lane-heading">LAYERS</span><div id="bar-ruler" class="bar-ruler"></div></div><div id="lane-list" class="lane-list"></div><div class="sequence-empty" id="empty-state" hidden>音源を追加してください。</div></div></div>
+          <div class="sequence-footer"><span><i class="legend-mark"></i>音の断片 <i class="legend-mark reverse-mark"></i>逆再生</span><span><b>LOCK</b> でレーンを固定</span></div>
+          <div class="phrase-meta"><label for="seed">SEED <input id="seed" value="BLUE01" maxlength="24" spellcheck="false" autocomplete="off" aria-label="生成シード"></label><span id="event-count">— fragments</span><label class="swing-control" for="swing">SWING <input id="swing" type="range" min="0" max="50" value="0"><output id="swing-output">0%</output></label></div>
+        </section>
+      </div>
+
+      <section class="shape-panel" aria-label="生成設定">
+        <div class="section-heading"><h2><span>03</span> PARAMETERS</h2></div>
+        <div class="macro-grid">
+          <label class="macro" for="density"><div class="macro-top"><span class="macro-name">busy<small>音の密度</small></span><output id="density-output">60<span>%</span></output></div><input id="density" type="range" min="0" max="100" value="60"><div class="range-labels"><span>SPARSE</span><span>FULL</span></div></label>
+          <label class="macro" for="breaks"><div class="macro-top"><span class="macro-name">breaks<small>休符の長さ</small></span><output id="breaks-output">15<span>%</span></output></div><input id="breaks" type="range" min="0" max="100" value="15"><div class="range-labels"><span>CONTINUOUS</span><span>SPACED</span></div></label>
+          <label class="macro" for="size"><div class="macro-top"><span class="macro-name">size<small>音の断片の長さ</small></span><output id="size-output">50<span>%</span></output></div><input id="size" type="range" min="0" max="100" value="50"><div class="range-labels"><span>TINY CUTS</span><span>LONG PIECES</span></div></label>
+          <label class="macro" for="motion"><div class="macro-top"><span class="macro-name">motion<small>音程・逆再生の変化</small></span><output id="motion-output">25<span>%</span></output></div><input id="motion" type="range" min="0" max="100" value="25"><div class="range-labels"><span>LOW</span><span>HIGH</span></div></label>
+        </div>
+      </section>
+
+      <section class="output-panel" aria-label="出力">
+        <div class="output-info"><span class="output-icon" aria-hidden="true">↳</span><div><strong>書き出し形式</strong><span>44.1 kHz / 16-bit stereo WAV</span></div></div>
+        <label class="master-control" for="master-volume"><span>MONITOR</span><input type="range" id="master-volume" min="0" max="100" value="75" aria-label="試聴音量"><output id="master-output">75%</output></label>
+        <button id="export-button" class="export-button" disabled>WAVを書き出す <span aria-hidden="true">↓</span></button>
+      </section>
+    </main>
+    <footer class="page-footer"><span>in the blue shirt</span><span><a href="licenses.html">ライセンス・出典</a><span class="footer-divider">/</span>Kerfbend v0.2</span></footer>
+  </div>
+  <div id="status" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="help-dialog"><div class="dialog-top"><span>HOW TO / Kerfbend</span><button id="close-help" class="icon-button" aria-label="使い方を閉じる">×</button></div><h2>使い方</h2><ol><li><strong>音源の追加</strong>音源をドロップ。ファイル名にキーがあれば採用し、なければ音声を解析します。</li><li><strong>キー同期</strong>KEY SYNCは最初からON。合わせ先は自動選択か手動指定。素材ごとのキーも修正・補正解除できます。</li><li><strong>フレーズの生成</strong>再生しながら4つのスライダーを調整。「新しいフレーズ」で別の組み合わせに。</li><li><strong>レーン操作</strong>LOCKで断片と配置を固定。Mはミュート、Sはソロ。↶で前の状態に戻せます。</li><li><strong>WAVの書き出し</strong>「WAVを書き出す」でループを保存します。</li></ol><div class="help-note">素材は「その他」と「ドラム」に分けて表示します。kick・snare・drumsなどのファイル名はドラムに自動分類し、各素材の「分類」で変更できます。分類を変えても素材のキー設定は保持します。<br><br>同時発音数は「その他」「ドラム」それぞれ1〜8個で指定します。例えば両方1個なら、その他1音とドラム1音が同時に鳴ります。上限を超える断片は省略し、素材と元の配置は保持します。上限を戻すと省略した断片も戻ります。LOCK中もこの上限を適用します。<br><br>素材は最大8個、1ファイル40 MB・60秒以内、合計120秒以内。読み込める形式はブラウザにより異なります。<br><br>キー名はC#m・Bb minor・F major・Camelotの8Aなどに対応。音声解析は推定で、判定が曖昧な音や打楽器は自動移調を保留します。誤判定は各素材のメニューで修正できます。自動の合わせ先は、キーが分かるユーザー素材をデモより優先します。<br><br>すべての音程付き素材をメジャーキー基準で扱います。マイナーは平行調に読み替えます（A minor → C major、D minor → F major）。読み替え自体では音程を変えず、読み替え後のキーから合わせ先に移調します。単音や長短不明のルートは、同じルートのmajorを処理上の基準にします。元の判定は素材欄で確認・修正できます。和音そのものの長短調は変換しません。LOCK中もキー同期は反映されます。ピッチ変更に伴って再生速度も変わり、独立したタイムストレッチは未実装です。<br><br>音源と編集状態はページを閉じると失われるため、保存する場合はWAVを書き出してください。MONITORは試聴専用で、WAVの音量には影響しません。</div></dialog>
+</body>
+</html>
