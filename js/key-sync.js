@@ -41,7 +41,7 @@
     if (fixed) return toMajor(fixed);
     const candidates = lanes.map((lane, index) => ({ lane, key: sourceKey(lane), index })).filter((entry) => isTonal(entry.key));
     // User material leads the demo. Full keys lead isolated notes within each group.
-    const rank = (entry) => (entry.lane.kind === 'upload' ? 0 : 4) +
+    const rank = (entry) => (['upload', 'fm'].includes(entry.lane.kind) ? 0 : 4) +
       (entry.key.mode === 'unknown' ? 2 : 0) + (entry.key.source === 'analysis' ? 1 : 0);
     candidates.sort((a, b) => rank(a) - rank(b) || a.index - b.index);
     if (!candidates.length) return null;

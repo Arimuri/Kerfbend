@@ -22,6 +22,11 @@
   let lastPosition = '';
   let analysisLabel = '';
   let keyPlan = harmony.plan([], state.settings);
+  let fmNumber = 0;
+  let fmDraft = null;
+  let fmBusy = false;
+  let fmVersion = 0;
+  let fmPreviewSource = null;
 
   function fillKeyOptions(select, includeNotes = false) {
     ['major', ...(includeNotes ? ['minor', 'unknown'] : [])].forEach((mode) => {
@@ -80,6 +85,7 @@
     $('undo-button').disabled = history.length === 0 || importing;
     $('export-button').disabled = empty || rendering || !state.buffer || importing;
     $('demo-button').disabled = importing || state.lanes.length >= MAX_SOURCES;
+    $('fm-button').disabled = importing || state.lanes.length >= MAX_SOURCES;
     $('clear-sources-button').disabled = importing || empty;
     $('file-input').disabled = importing;
     $('key-sync').disabled = importing;
@@ -223,8 +229,8 @@
       row.querySelector('.source-title').textContent = filename;
       row.querySelector('.source-title').title = filename;
       const entry = keyPlan.byId[lane.id];
-      const sourceName = { filename: 'ファイル名', analysis: '音声推定', manual: '手動', demo: 'デモ設定' }[entry.key.source] || '未判定';
-      const detail = `${lane.buffer.duration.toFixed(2)}s / ${lane.kind === 'upload' ? 'YOUR SOUND' : 'SYNTH DEMO'} · ${sourceName}`;
+      const sourceName = { filename: 'ファイル名', analysis: '音声推定', manual: '手動', demo: 'デモ設定', synth: '合成設定' }[entry.key.source] || '未判定';
+      const detail = `${lane.buffer.duration.toFixed(2)}s / ${lane.kind === 'upload' ? 'YOUR SOUND' : lane.kind === 'fm' ? 'FM SYNTH' : 'SYNTH DEMO'} · ${sourceName}`;
       row.querySelector('.source-detail').textContent = detail;
       row.querySelector('.source-detail').title = detail;
       const categorySelect = row.querySelector('.source-category');
@@ -602,6 +608,140 @@
     }
   }
 
+  function fmOptions() {
+    return window.BlueLoopFMSynth.normalize({
+      bpm: state.settings.bpm, bars: state.settings.bars,
+      tonic: Number($('fm-key').value.split(':')[0]), octave: Number($('fm-octave').value),
+      ratio: Number($('fm-ratio').value), index: Number($('fm-index').value),
+      decay: Number($('fm-decay').value), density: Number($('fm-density').value), seed: $('fm-seed').value,
+    });
+  }
+
+  function fmCapacityError(duration) {
+    if (state.lanes.length >= MAX_SOURCES) return `素材は最大${MAX_SOURCES}個です。不要な素材を削除してください。`;
+    const total = state.lanes.reduce((sum, lane) => sum + lane.buffer.duration, 0);
+    return total + duration > MAX_TOTAL_SECONDS + 1 / 44100 ? `素材の合計が${MAX_TOTAL_SECONDS}秒を超えます。不要な素材を削除してください。` : '';
+  }
+
+  function updateFMControls() {
+    ['key', 'octave', 'ratio', 'index', 'decay', 'density', 'seed', 'reroll', 'preview'].forEach((id) => { $(`fm-${id}`).disabled = fmBusy; });
+    $('fm-add').disabled = fmBusy || !fmDraft || importing || !!fmCapacityError(fmDraft.buffer.duration);
+    $('fm-preview').textContent = fmBusy ? '合成中…' : fmPreviewSource ? '■ 試聴を停止' : fmDraft ? '▶ 元フレーズを試聴' : '▶ 生成・試聴';
+    $('fm-dialog').setAttribute('aria-busy', String(fmBusy));
+  }
+
+  function stopFMPreview() {
+    fmPreviewSource = null;
+    engine.stop();
+  }
+
+  function invalidateFM() {
+    ++fmVersion;
+    fmBusy = false;
+    fmDraft = null;
+    stopFMPreview();
+    $('fm-notes').replaceChildren();
+    $('fm-notes').setAttribute('aria-label', '生成前のフレーズ表示');
+    $('fm-index-output').textContent = Number($('fm-index').value).toFixed(1);
+    $('fm-decay-output').textContent = `${$('fm-decay').value} ms`;
+    $('fm-density-output').textContent = `${$('fm-density').value}%`;
+    ['index', 'decay', 'density'].forEach((id) => rangeFill($(`fm-${id}`)));
+    const options = fmOptions();
+    const duration = options.bars * 4 * 60 / options.bpm;
+    $('fm-length').textContent = `${options.bpm} BPM / ${options.bars} bars / ${duration.toFixed(2)} s`;
+    $('fm-status').textContent = fmCapacityError(duration) || '「生成・試聴」で元のフレーズを確認できます。';
+    updateFMControls();
+  }
+
+  function drawFMNotes(phrase) {
+    const svg = $('fm-notes');
+    svg.replaceChildren();
+    const pitches = phrase.notes.map((note) => note.midi);
+    const low = Math.min(...pitches) - 2, high = Math.max(...pitches) + 2;
+    const add = (tag, attrs) => {
+      const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+      svg.append(element);
+    };
+    for (let bar = 0; bar <= phrase.settings.bars; bar++) {
+      const x = 8 + bar / phrase.settings.bars * 544;
+      add('line', { x1: x, x2: x, y1: 6, y2: 82, stroke: '#dce3f1' });
+    }
+    phrase.notes.forEach((note) => add('rect', {
+      x: 8 + note.start / phrase.duration * 544, y: 8 + (high - note.midi) / (high - low) * 64,
+      width: Math.max(1, note.duration / phrase.duration * 544 - 1), height: 5, rx: 1,
+      fill: '#244ce5', opacity: 0.4 + note.velocity * 0.6,
+    }));
+    svg.setAttribute('aria-label', `${phrase.settings.bars}小節、${phrase.notes.length}音のチョップ前のフレーズ`);
+  }
+
+  async function previewFM(reroll = false) {
+    if (fmBusy || !$('fm-dialog').open) return;
+    if (fmPreviewSource && !reroll) { stopFMPreview(); updateFMControls(); return; }
+    if (reroll) {
+      const seed = new Uint32Array(1);
+      window.crypto.getRandomValues(seed);
+      $('fm-seed').value = seed[0].toString(36).toUpperCase();
+      invalidateFM();
+    }
+    const version = ++fmVersion;
+    const options = fmOptions();
+    fmBusy = true;
+    updateFMControls();
+    try {
+      // Resume in the click handler before yielding for browsers that require
+      // a direct user gesture to unlock audio playback.
+      await engine.init();
+      if (version !== fmVersion || !$('fm-dialog').open) return;
+      if (!fmDraft) {
+        $('fm-status').textContent = 'FMフレーズを合成しています…';
+        // Let the dialog paint before filling the PCM buffer.
+        await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+        if (version !== fmVersion || !$('fm-dialog').open) return;
+        fmDraft = engine.createFMSource(options);
+        $('fm-seed').value = fmDraft.phrase.settings.seed;
+        drawFMNotes(fmDraft.phrase);
+      }
+      $('fm-status').textContent = fmCapacityError(fmDraft.buffer.duration) || `${fmDraft.phrase.notes.length}音 / ${harmony.notes[options.tonic]} major。元のフレーズを試聴します。`;
+      const source = await engine.playPreview(fmDraft.buffer, fmDraft.buffer.duration);
+      if (version !== fmVersion || !$('fm-dialog').open) return;
+      fmPreviewSource = source || null;
+      if (source) {
+        const onended = source.onended;
+        source.onended = (event) => {
+          if (onended) onended.call(source, event);
+          if (fmPreviewSource === source) { fmPreviewSource = null; updateFMControls(); }
+        };
+      }
+    } catch (error) {
+      if (version === fmVersion) $('fm-status').textContent = error.message;
+    } finally {
+      if (version === fmVersion) { fmBusy = false; updateFMControls(); }
+    }
+  }
+
+  function addFMSource() {
+    if (fmBusy || !fmDraft || importing) return;
+    const error = fmCapacityError(fmDraft.buffer.duration);
+    if (error) { $('fm-status').textContent = error; updateFMControls(); return; }
+    const { buffer, phrase } = fmDraft;
+    const options = phrase.settings;
+    const name = `FM SINE ${harmony.notes[options.tonic]} major · ${options.seed}`;
+    remember();
+    state.lanes.push({
+      id: `fm-${++fmNumber}`, name, kind: 'fm', category: 'other', buffer,
+      synthSettings: { ...options }, color: colors[state.lanes.length % colors.length], volume: .7,
+      muted: false, solo: false, locked: false, events: [],
+      detectedKey: harmony.fromValue(`${options.tonic}:major`, 'synth'), keyOverride: 'auto', keyShift: 0,
+    });
+    stopFMPreview();
+    $('fm-dialog').close();
+    regenerateEvents();
+    updateView();
+    renderAudio();
+    notify('FMフレーズを素材に追加してチョップしました。');
+  }
+
   async function exportWav() {
     await pendingRender;
     if (!state.buffer) return;
@@ -716,11 +856,26 @@
   $('export-button').addEventListener('click', exportWav);
   $('demo-button').addEventListener('click', () => addDemos());
   $('clear-sources-button').addEventListener('click', clearSources);
+  fillKeyOptions($('fm-key'));
+  $('fm-button').addEventListener('click', () => {
+    if (importing || state.lanes.length >= MAX_SOURCES) return;
+    stop();
+    $('fm-key').value = `${keyPlan.target ? keyPlan.target.tonic : 0}:major`;
+    invalidateFM();
+    $('fm-dialog').showModal();
+  });
+  ['key', 'octave', 'ratio', 'index', 'decay', 'density', 'seed'].forEach((id) => $(`fm-${id}`).addEventListener('input', invalidateFM));
+  $('fm-preview').addEventListener('click', () => previewFM());
+  $('fm-reroll').addEventListener('click', () => previewFM(true));
+  $('fm-add').addEventListener('click', addFMSource);
+  $('close-fm').addEventListener('click', () => $('fm-dialog').close());
+  $('fm-dialog').addEventListener('cancel', invalidateFM);
+  $('fm-dialog').addEventListener('close', invalidateFM);
   $('help-button').addEventListener('click', () => $('help-dialog').showModal());
   $('close-help').addEventListener('click', () => $('help-dialog').close());
   $('help-dialog').addEventListener('click', (event) => { if (event.target === $('help-dialog')) $('help-dialog').close(); });
   window.addEventListener('keydown', (event) => {
-    if (event.target.closest('input,select,textarea') || $('help-dialog').open || event.repeat) return;
+    if (event.target.closest('input,select,textarea') || document.querySelector('dialog[open]') || event.repeat) return;
     if (event.code === 'Space') {
       if (event.target.closest('button,a,[role="button"]')) return;
       event.preventDefault(); togglePlay();

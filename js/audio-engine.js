@@ -226,6 +226,10 @@
       return context;
     }
 
+    createFMSource(settings) {
+      return global.BlueLoopFMSynth.synthesize(this._ensureContext(), settings);
+    }
+
     async createDemoLanes() {
       var context = this._ensureContext();
       return [
@@ -497,7 +501,7 @@
       }
     }
 
-    async playPreview(buffer) {
+    async playPreview(buffer, maxSeconds = 4) {
       if (!isBuffer(buffer)) return;
       var request = ++this._playRequest;
       var context = await this.init();
@@ -505,7 +509,7 @@
       this._stopPreview();
       var source = context.createBufferSource();
       var gain = context.createGain();
-      var duration = Math.min(buffer.duration, 4);
+      var duration = Math.min(buffer.duration, Math.max(0.01, number(maxSeconds, 4)));
       var now = context.currentTime;
       source.buffer = buffer;
       source.connect(gain);

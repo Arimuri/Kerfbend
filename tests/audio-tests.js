@@ -160,6 +160,32 @@
       }
       assert(JSON.stringify(event) === sourceEvents, 'Key correction changed source events');
     });
+    await test('Generated FM material can be chopped, retuned, enveloped and exported without changing its source', async function () {
+      var source = engine.createFMSource({ bpm: 120, bars: 2, tonic: 7, octave: 2, density: 85, index: 3, seed: 'FM-RENDER' });
+      var original = source.buffer.getChannelData(0).slice();
+      var originalPhrase = JSON.stringify(source.phrase);
+      var lane = { id: 'fm-render', kind: 'fm', category: 'other', buffer: source.buffer, volume: 0.7, keyShift: 0, events: [] };
+      var config = Object.assign({}, global.BlueLoopGenerator.defaults, { bpm: 120, bars: 2, density: 100, breaks: 0, motion: 70, octave: 50, maxVoices: 1, maxDrumVoices: 1 });
+      var cuts = global.BlueLoopGenerator.generate([lane], config, 'FM-CHOPS');
+      var originalCuts = JSON.stringify(cuts);
+      assert(cuts.length > 4 && cuts.some(function (cut) { return cut.startRatio > 0; }), 'FM material was not sliced into a phrase');
+      var dry = await engine.render([lane], config, cuts);
+      lane.keyShift = -5;
+      var effected = await engine.render([lane], Object.assign({}, config, { pitchEnvDepth: 12, pitchEnvTime: 100 }), cuts);
+      assert(effected.length === 4 * 44100 && effected.numberOfChannels === 2, 'FM chops lost exact loop length or stereo output');
+      assert(peak(effected) > 0.01 && peak(effected) <= 0.950001, 'FM chops became silent, non-finite or clipped');
+      assert(maximumDifference(dry, effected) > 0.001, 'Key correction and pitch envelope did not reach FM material');
+      var wav = new DataView(await engine.encodeWav(effected).arrayBuffer());
+      assert(wav.byteLength === 44 + effected.length * 4 && wav.getUint32(24, true) === 44100, 'FM WAV has an incorrect format or frame count');
+      var pcm = effected.getChannelData(0);
+      var frame = pcm.findIndex(function (sample) { return Math.abs(sample) > 0.01; });
+      assert(frame >= 0 && wav.getInt16(44 + frame * 4, true) === Math.round(pcm[frame] * (pcm[frame] < 0 ? 32768 : 32767)), 'FM WAV differs from the rendered chops');
+      lane.keyShift = 0;
+      var restored = await engine.render([lane], config, cuts);
+      assert(maximumDifference(dry, restored) === 0, 'Returning FM controls to their original state changed the phrase');
+      assert(source.buffer.getChannelData(0).every(function (sample, index) { return sample === original[index]; }), 'Chopping or effects changed original FM PCM');
+      assert(JSON.stringify(source.phrase) === originalPhrase && JSON.stringify(cuts) === originalCuts, 'Rendering changed synthesized notes or generated cuts');
+    });
     await test('Voice limits render only the expected swung slices and remain stable under key corrections', async function () {
       assert(global.BlueLoopPlayback, 'Load playback-plan.js to verify the renderer integration');
       var sources = [220, 330, 440].map(function (hz, index) {
@@ -453,6 +479,35 @@
         await engine.decodeFile({ size: 40 * 1024 * 1024 + 1, arrayBuffer: function () { throw new Error('File should not be read'); } });
       } catch (error) { rejected = /40 MB/.test(error.message); }
       assert(rejected, 'Oversized file did not receive a clear size error');
+    });
+    await test('Preview keeps the four-second source default and supports a complete synthesized phrase', async function () {
+      var originalInit = engine.init;
+      var createSource = engine.context.createBufferSource;
+      var scheduled = [];
+      engine.init = function () { return Promise.resolve(engine.context); };
+      engine.context.createBufferSource = function () {
+        var source = createSource.call(engine.context);
+        var start = source.start;
+        source.start = function (when, offset, duration) {
+          scheduled.push(duration);
+          start.call(source, when, offset, duration);
+        };
+        return source;
+      };
+      try {
+        await engine.playPreview(lanes[0].buffer);
+        engine.stop();
+        await engine.playPreview(lanes[0].buffer, lanes[0].buffer.duration);
+        engine.stop();
+        await engine.playPreview(lanes[0].buffer, lanes[0].buffer.duration + 10);
+        assert(scheduled[0] === 4, 'Ordinary source previews no longer stop at four seconds');
+        assert(scheduled[1] === lanes[0].buffer.duration, 'An explicit full-phrase preview was truncated');
+        assert(scheduled[2] === lanes[0].buffer.duration, 'Preview scheduled beyond the available source audio');
+      } finally {
+        engine.init = originalInit;
+        engine.context.createBufferSource = createSource;
+        engine.stop();
+      }
     });
     await test('Stopping while preview initialization is pending prevents deleted audio from starting later', async function () {
       var originalInit = engine.init;

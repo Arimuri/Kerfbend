@@ -32,6 +32,14 @@
     check('No reliable sources leaves target unset', sync.plan([uncertain], { targetKey: 'auto' }).target === null);
     const analyzed = { ...lane('audio', '2:minor'), detectedKey: key('2:minor', 'analysis') };
     check('Explicit filename target outranks an analyzed key', sync.selectTarget([analyzed, cm], { targetKey: 'auto' }).laneId === cm.id);
+    const fm = { ...lane('fm', '7:major', 'fm'), detectedKey: key('7:major', 'synth') };
+    const fmAuto = sync.plan([demo, fm], { keySync: true, targetKey: 'auto' });
+    check('A generated FM phrase establishes its known major key ahead of demos', fmAuto.target.laneId === fm.id && fmAuto.target.label === 'G major' && fmAuto.entries[1].shift === 0 && fmAuto.entries[1].method === 'anchor');
+    check('Known FM and filename keys share user-material priority with stable source order', sync.selectTarget([cm, fm], { targetKey: 'auto' }).laneId === cm.id && sync.selectTarget([fm, cm], { targetKey: 'auto' }).laneId === fm.id);
+    check('The exact generated FM key outranks an estimated imported key', sync.selectTarget([analyzed, fm], { targetKey: 'auto' }).laneId === fm.id);
+    check('FM key opt-out restores the next reliable source as the automatic target', sync.selectTarget([{ ...fm, keyOverride: 'none' }, demo], { targetKey: 'auto' }).laneId === demo.id);
+    const fmFixed = sync.plan([fm], { keySync: true, targetKey: '0:major' }).entries[0];
+    check('FM sources align to fixed keys without losing their original synthesis key', fmFixed.shift === 5 && fmFixed.originalKey.label === 'G major' && fmFixed.originalKey.source === 'synth' && fmFixed.targetKey.label === 'C major' && fm.detectedKey.tonic === 7);
     const chromaticMinor = { ...cm, detectedKey: { ...key('0:minor', 'analysis'), chroma: [.296, .079, 0, .154, .044, .122, 0, .174, .022, .003, .104, .001] } };
     check('An analyzed automatic anchor is never transposed away from its own key', sync.plan([chromaticMinor], { keySync: true, targetKey: 'auto' }).entries[0].shift === 0);
     const chroma = new Array(12).fill(0); chroma[0] = .5; chroma[4] = .3; chroma[7] = .2;
