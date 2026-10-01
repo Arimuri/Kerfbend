@@ -246,6 +246,69 @@
     }
     assert(inside / insideSteps < 0.5 * (outside / outsideSteps), 'Answering parts play mostly in the lead\'s gaps: ' + (inside / insideSteps).toFixed(3) + ' vs ' + (outside / outsideSteps).toFixed(3));
     assert(generator.roleNames.join(',') === 'lead,bass,fill', 'Role names are lead, bass and fill');
+    function cutOf(event) {
+      return JSON.stringify([event.sliceIndex, event.startRatio, event.sourceChop, event.segmentCount, event.lengthRatio]);
+    }
+    let fillsSeen = 0;
+    let restsSeen = 0;
+    let landingsSeen = 0;
+    for (let index = 0; index < 16; index += 1) {
+      [[1, 15], [2, 15], [4, 15], [8, 15], [4, 60], [8, 100], [4, 0]].forEach(function (values) {
+        const bars = values[0];
+        const breaks = values[1];
+        const total = bars * 16;
+        const seed = 'ENDS-' + index;
+        const endSettings = Object.assign({}, settings, { bars, breaks, density: 80 });
+        const plan = generator.phraseEnds(endSettings, seed);
+        const events = generator.generate(band, endSettings, seed);
+        const own = function (id) { return events.filter(function (event) { return event.laneId === id; }); };
+        const label = bars + ' bars / breaks ' + breaks + ' / ' + seed;
+        const raw = total * 0.5 * breaks / 100;
+        const restLength = raw < 2 ? 0 : Math.min(total / 2, Math.max(4, Math.round(raw / 4) * 4));
+        const span = bars >= 4 ? 32 : 16;
+        if (breaks === 0) {
+          assert(plan.rest === null && plan.fills.length === 0 && plan.landings.length === 0, 'BREAKS 0 keeps a continuous loop without rests or fills: ' + label);
+          return;
+        }
+        assert(restLength === 0 ? plan.rest === null : plan.rest.end - plan.rest.start === restLength && plan.rest.start % 4 === 0 && plan.rest.end % span === 0,
+          'BREAKS sets a beat-aligned rest that ends on a phrase boundary: ' + label);
+        if (plan.rest) {
+          restsSeen += 1;
+          assert(events.every(function (event) {
+            return event.step + event.durationSteps <= plan.rest.start || event.step >= plan.rest.end;
+          }), 'Every part is silent through the shared rest: ' + label);
+        }
+        assert(plan.fills.every(function (end) { return (end % 64 === 0 || end === total) && (!plan.rest || end !== plan.rest.end); }), 'Fills close four-bar phrases or the loop, never where the rest ends: ' + label);
+        plan.fills.forEach(function (end) {
+          if (plan.rest && end > plan.rest.start && end - 4 < plan.rest.end) return;
+          fillsSeen += 1;
+          const roll = own('kit').filter(function (event) { return event.step >= end - 4 && event.step < end; });
+          assert(roll.length === 4 && roll.every(function (event, position) {
+            return event.step === end - 4 + position && event.durationSteps === 1 && cutOf(event) === cutOf(roll[0]) && (!position || event.velocity > roll[position - 1].velocity);
+          }), 'Drums roll sixteenths with rising velocity through the fill beat: ' + label);
+          const stutter = own('vox').filter(function (event) { return event.step >= end - 4 && event.step < end; });
+          assert(stutter.length === 3 && stutter.every(function (event, position) {
+            return event.step === end - 4 + position && cutOf(event) === cutOf(stutter[0]) && !event.reverse;
+          }), 'The lead stutters three sixteenths and leaves the last one open: ' + label);
+          ['low', 'pad'].forEach(function (id) {
+            assert(own(id).every(function (event) { return event.step + event.durationSteps <= end - 4 || event.step >= end; }), 'Bass and answering parts drop out for the fill: ' + id + ' / ' + label);
+          });
+        });
+        plan.landings.forEach(function (step) {
+          if (plan.rest && step >= plan.rest.start && step < plan.rest.end) return;
+          landingsSeen += 1;
+          ['vox', 'low', 'kit'].forEach(function (id) {
+            const lane = own(id);
+            const landing = lane.find(function (event) { return event.step === step; });
+            const home = lane.find(function (event) { return event.step === 0; }) || landing;
+            assert(landing && cutOf(landing) === cutOf(home) && landing.semitones === 0 && !landing.reverse && landing.velocity >= 0.9,
+              'The next downbeat lands on the home cut without octave or reverse: ' + id + ' / ' + label);
+          });
+        });
+      });
+    }
+    assert(fillsSeen > 20 && restsSeen > 20 && landingsSeen > 20, 'Fills, rests and landings all occur: ' + [fillsSeen, restsSeen, landingsSeen].join('/'));
+    assert(JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30 }), 'SAME')) === JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30, density: 10, size: 90 }), 'SAME')), 'Phrase ends depend only on bars, BREAKS and SEED');
     return { passed: assertions.length, assertions };
   };
 })(typeof window !== 'undefined' ? window : globalThis);

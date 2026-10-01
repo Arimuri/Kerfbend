@@ -288,6 +288,79 @@
     return { A: a.events, A2: withEnding(a.events, answer), B: b.events, B2: withEnding(b.events, turn) };
   }
 
+  // Phrase ends are shared by every lane so the loop breathes together:
+  // BREAKS sets one rest that ends on a two-bar boundary, every four bars
+  // (or the loop end) closes with a fill, and the next downbeat lands home.
+  function phrasePlan(settings, seed) {
+    const total = settings.bars * 16;
+    const draw = randomFor(seed, '__phrase-ending__')();
+    const raw = total * 0.5 * settings.breaks / 100;
+    const rest = raw < 2 ? 0 : Math.min(total / 2, Math.max(4, Math.round(raw / 4) * 4));
+    const span = settings.bars >= 4 ? 32 : 16;
+    const ends = [];
+    for (let end = span; end <= total; end += span) ends.push(end);
+    const fits = ends.filter(function (end) { return end >= rest; });
+    const restEnd = rest ? fits[Math.floor(draw * fits.length)] : null;
+    const fills = settings.breaks > 0 ? ends.filter(function (end) { return (end % 64 === 0 || end === total) && end !== restEnd; }) : [];
+    return {
+      rest: rest ? { start: restEnd - rest, end: restEnd } : null,
+      fills,
+      landings: (restEnd ? [restEnd] : []).concat(fills).map(function (end) { return end % total; }),
+    };
+  }
+
+  const cutFields = ['sliceIndex', 'segmentCount', 'startRatio', 'lengthRatio', 'sourceChop'];
+
+  function withCut(event, source) {
+    const copy = Object.assign({}, event);
+    cutFields.forEach(function (field) {
+      if (source[field] === undefined) delete copy[field];
+      else copy[field] = source[field];
+    });
+    return copy;
+  }
+
+  // A stutter repeats only the first note of a run.
+  function firstNote(event, plan) {
+    if (!plan || !event.segmentCount) return event;
+    const note = plan.notes[event.sliceIndex];
+    return Object.assign({}, event, { segmentCount: 1, lengthRatio: (note.end - note.start) / plan.duration });
+  }
+
+  function hits(source, start, velocities, semitones) {
+    return velocities.map(function (velocity, index) {
+      return Object.assign(withCut({ laneId: source.laneId, step: start + index }, source), {
+        durationSteps: 1, semitones, reverse: false, velocity,
+      });
+    });
+  }
+
+  function shapeEnds(events, role, ends, context, home) {
+    let result = events;
+    ends.fills.forEach(function (end) {
+      const start = end - 4;
+      const earlier = result.filter(function (event) { return event.step < start; });
+      const source = earlier.length ? earlier[earlier.length - 1] : home;
+      result = result.filter(function (event) { return event.step < start || event.step >= end; });
+      if (!source) return;
+      // Drums roll through the last beat; the lead stutters and leaves the
+      // final sixteenth open; bass and answering parts drop out.
+      if (role === 'drums') result = result.concat(hits(source, start, [0.6, 0.68, 0.78, 0.9], 0));
+      else if (role === 'lead') result = result.concat(hits(firstNote(source, context.plan), start, [0.62, 0.72, 0.84], source.semitones));
+    });
+    if (home && role !== 'fill') {
+      ends.landings.forEach(function (step) {
+        const index = result.findIndex(function (event) { return event.step === step; });
+        const current = index >= 0 ? result[index] : Object.assign({}, home, { step });
+        // Land on the bar-one cut: no octave jump, no reverse, an accent.
+        const landing = Object.assign(withCut(current, home), { semitones: 0, reverse: false, velocity: Math.max(0.9, current.velocity) });
+        result = index >= 0 ? result.map(function (event, position) { return position === index ? landing : event; }) : result.concat([landing]);
+      });
+    }
+    if (ends.rest) result = result.filter(function (event) { return event.step < ends.rest.start || event.step >= ends.rest.end; });
+    return result.slice().sort(function (first, second) { return first.step - second.step; });
+  }
+
   function lockedEvents(lane, totalSteps) {
     return lane.events.filter(function (event) {
       return event && Number.isFinite(event.step) && event.step >= 0 && event.step < totalSteps;
@@ -329,6 +402,7 @@
     // Every unit is drawn whatever the length, so A and its answer stay the
     // same when the loop grows from 2 to 4 or 8 bars.
     const units = plan ? noteUnits(context) : sliceUnits(context);
+    const home = units.A.find(function (event) { return event.step === 0; }) || null;
     let events = [];
     for (let bar = 0; bar < settings.bars; bar += 1) {
       units[formUnit(bar, settings.bars)].forEach(function (event) {
@@ -336,23 +410,19 @@
       });
     }
     if (role === 'fill' && part.occupancy) events = answerLead(events, lane, settings, seed, part.occupancy);
+    const ends = part && part.ends ? part.ends : phrasePlan(settings, seed);
+    events = shapeEnds(events, role, ends, context, home);
 
-    // A single empty span makes BREAKS audibly different from lowering density.
-    const breakLength = Math.floor(totalSteps * 0.5 * settings.breaks / 100);
-    // Share the gap across lanes so the whole phrase can breathe.
-    const breakStart = Math.floor(randomFor(seed, '__phrase-break__')() * (totalSteps - breakLength + 1));
-    const breakEnd = breakStart + breakLength;
-    const audibleEvents = events.filter(function (event) {
-      return breakLength === 0 || event.step < breakStart || event.step >= breakEnd;
+    // Gate before the next onset, the shared rest and, for parts that drop
+    // out, the fill beat, avoiding piled-up cuts.
+    const stops = (ends.rest ? [ends.rest.start] : []).concat(role === 'bass' || role === 'fill'
+      ? ends.fills.map(function (end) { return end - 4; }) : []).sort(function (first, second) { return first - second; });
+    events.forEach(function (event, index) {
+      const nextStep = index + 1 < events.length ? events[index + 1].step : totalSteps;
+      const stop = stops.find(function (step) { return step > event.step; });
+      event.durationSteps = Math.min(event.durationSteps, nextStep - event.step, (stop === undefined ? totalSteps : stop) - event.step);
     });
-
-    // Gate before the next onset and at the silence boundary, avoiding piled-up cuts.
-    audibleEvents.forEach(function (event, index) {
-      const nextStep = index + 1 < audibleEvents.length ? audibleEvents[index + 1].step : totalSteps;
-      const boundary = breakLength > 0 && event.step < breakStart ? breakStart : totalSteps;
-      event.durationSteps = Math.min(event.durationSteps, nextStep - event.step, boundary - event.step);
-    });
-    return audibleEvents;
+    return events;
   }
 
   function generate(lanes, settings, seed) {
@@ -361,16 +431,17 @@
     const parts = roles(list);
     // Leads come first so answering parts can hear where the lead sounds.
     const occupancy = new Uint8Array(params.bars * 16);
+    const ends = phrasePlan(params, seed);
     const byLane = new Map();
     list.filter(function (lane) { return parts[lane.id] === 'lead'; }).forEach(function (lane) {
-      const events = generateLane(lane, params, seed, { role: 'lead' });
+      const events = generateLane(lane, params, seed, { role: 'lead', ends });
       events.forEach(function (event) {
         for (let step = event.step; step < Math.min(occupancy.length, event.step + event.durationSteps); step += 1) occupancy[step] = 1;
       });
       byLane.set(lane, events);
     });
     list.filter(function (lane) { return parts[lane.id] !== 'lead'; }).forEach(function (lane) {
-      byLane.set(lane, generateLane(lane, params, seed, { role: parts[lane.id], occupancy }));
+      byLane.set(lane, generateLane(lane, params, seed, { role: parts[lane.id], occupancy, ends }));
     });
     return list.reduce(function (events, lane) { return events.concat(byLane.get(lane)); }, []);
   }
@@ -380,5 +451,9 @@
     return params.bars * 4 * 60 / params.bpm;
   }
 
-  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames });
+  function phraseEnds(settings, seed) {
+    return phrasePlan(normalize(settings), seed);
+  }
+
+  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames, phraseEnds });
 })(typeof window !== 'undefined' ? window : globalThis);
