@@ -77,11 +77,25 @@
     state.events = state.lanes.flatMap((lane) => lane.events);
   }
 
+  // A locked lane keeps the part its phrase was built with until it is
+  // unlocked, so a new source cannot take the lead from a locked lead.
+  function rolePinned() {
+    return state.lanes.map((lane) => (lane.locked && lane.playedRole && lane.playedRole !== 'drums' && !generator.roleNames.includes(lane.role)
+      ? { ...lane, role: lane.playedRole } : lane));
+  }
+
+  // Reports parts that changed role after a rebuild, for toasts.
+  function roleMoves(before, except) {
+    return state.lanes.filter((lane) => lane !== except && before.has(lane.id) && before.get(lane.id) !== lane.playedRole)
+      .map((lane) => `${lane.name}は自動で${roleLabels[lane.playedRole]}になりました。`).join('');
+  }
+
   function regenerateEvents() {
-    const events = generator.generate(state.lanes, state.settings, state.seed);
+    const lanes = rolePinned();
+    const events = generator.generate(lanes, state.settings, state.seed);
     // Lanes show the role their current phrase was built with; removing a
     // source or changing a category keeps the arrangement until it is rebuilt.
-    const parts = generator.roles(state.lanes);
+    const parts = generator.roles(lanes);
     state.lanes.forEach((lane) => {
       lane.events = events.filter((event) => event.laneId === lane.id);
       if (!lane.locked || !lane.playedRole) lane.playedRole = parts[lane.id];
@@ -220,13 +234,13 @@
     };
     draw('', depth, milliseconds);
     // The faint pair marks the smallest, fastest end of the per-slice spread.
-    draw('-range', depth && (depthSpread || timeSpread) ? depth * (1 - depthSpread / 100) : 0,
-      milliseconds * Math.pow(4, -timeSpread / 100));
     const lowest = Math.max(1, Math.round(depth * (1 - depthSpread / 100)));
+    draw('-range', depth && (depthSpread || timeSpread) ? Math.min(depth, lowest) : 0,
+      milliseconds * Math.pow(4, -timeSpread / 100));
     const shortest = Math.max(5, Math.round(milliseconds * Math.pow(4, -timeSpread / 100)));
     const longest = Math.min(500, Math.round(milliseconds * Math.pow(4, timeSpread / 100)));
     $('pitch-env-depth-random-hint').textContent = !depthSpread || !depth ? '0%で全断片が同じ幅' : `断片ごとに ±${Math.min(lowest, depth)}〜${depth} st`;
-    $('pitch-env-time-random-hint').textContent = !timeSpread ? '0%で全断片が同じ時間' : `断片ごとに ${shortest}〜${longest} ms（断片内に戻る）`;
+    $('pitch-env-time-random-hint').textContent = !timeSpread ? '0%で全断片が同じ時間' : `断片ごとに ${shortest}〜${longest} ms（長くなる分は断片の7割まで）`;
     document.querySelector('.pitch-envelope-panel').classList.toggle('is-bypassed', !depth);
     document.body.classList.toggle('pitch-env-off', !depth);
   }
@@ -365,10 +379,11 @@
         regenerateEvents();
         updateView();
         renderAudio();
-        const moved = state.lanes.filter((other) => other !== lane && before.get(other.id) !== other.playedRole);
-        notify([`${lane.name}を${roleLabels[lane.playedRole]}にしました。`,
-          ...moved.map((other) => `${other.name}は自動で${roleLabels[other.playedRole]}になりました。`),
-          state.lanes.some((other) => other.locked) ? 'LOCK中のレーンは配置を保持します。' : '', '↶で戻せます。'].filter(Boolean).join(''), 6500);
+        const target = generator.roleNames.includes(lane.role) ? lane.role : generator.roles(state.lanes)[lane.id];
+        notify([lane.locked && target !== lane.playedRole
+          ? `${lane.name}はLOCK中のため、解除して作り直すと${roleLabels[target]}になります。`
+          : `${lane.name}を${roleLabels[lane.playedRole]}にしました。`,
+        roleMoves(before, lane), state.lanes.some((other) => other.locked && other !== lane) ? 'LOCK中のレーンは配置を保持します。' : '', '↶で戻せます。'].filter(Boolean).join(''), 6500);
       });
       const keySelect = row.querySelector('.source-key');
       const auto = document.createElement('option');
@@ -746,17 +761,20 @@
         added++;
       } catch (error) { errors.push(`${file.name}: ${error.message}`); }
     }
+    let moves = '';
     if (added) {
       history.push(before);
       if (history.length > MAX_HISTORY) history.shift();
+      const roles = new Map(state.lanes.map((lane) => [lane.id, lane.playedRole]));
       regenerateEvents();
+      moves = roleMoves(roles);
     }
     importing = false;
     analysisLabel = '';
     $('file-input').value = '';
     updateView();
     if (added) renderAudio();
-    notify([added ? `${added}個の素材を追加しました。` : '', ...errors].filter(Boolean).join(' '), errors.length ? 9000 : 3500);
+    notify([added ? `${added}個の素材を追加しました。${moves}` : '', ...errors].filter(Boolean).join(' '), errors.length || moves ? 9000 : 3500);
   }
 
   async function addDemos(initial = false) {
@@ -845,10 +863,17 @@
     updateFMControls();
   }
 
-  // Existing FM sources set the loop's chords, so new phrases default to them.
+  // The loop follows one FM source's chords (an FM lead, else the first FM
+  // source), so new phrases default to the preset those chords come from. A
+  // phrase made shorter than its progression only carries its first chords.
   function sharedProgression() {
-    const lane = state.lanes.find((entry) => entry.kind === 'fm' && entry.synthSettings);
-    return lane ? lane.synthSettings.progression || 'I' : null;
+    const lane = generator.chordLane(state.lanes);
+    if (!lane) return null;
+    const presets = window.BlueLoopFMSynth.progressions;
+    const fits = (name) => lane.chords.every((root, bar) => root === presets[name][bar % presets[name].length]) && lane.chords.length >= presets[name].length;
+    const chosen = lane.synthSettings && lane.synthSettings.progression;
+    if (chosen && presets[chosen] && fits(chosen)) return chosen;
+    return Object.keys(presets).find(fits) || null;
   }
 
   function chordName(tonic, root) {
@@ -947,10 +972,11 @@
     });
     stopFMPreview();
     $('fm-dialog').close();
+    const roles = new Map(state.lanes.map((lane) => [lane.id, lane.playedRole]));
     regenerateEvents();
     updateView();
     renderAudio();
-    notify('FMフレーズを素材に追加してチョップしました。');
+    notify(`FMフレーズを素材に追加してチョップしました。${roleMoves(roles)}`, 6500);
   }
 
   async function exportWav() {

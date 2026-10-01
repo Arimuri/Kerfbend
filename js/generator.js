@@ -351,7 +351,7 @@
     const draw = random();
     // Short breaks breathe for an eighth or a beat; longer ones in whole beats.
     const raw = total * 0.5 * settings.breaks / 100;
-    const rest = Math.min(total / 2, raw < 1.5 ? 0 : raw < 3 ? 2 : raw < 6 ? 4 : Math.round(raw / 4) * 4);
+    const rest = Math.min(total / 2, raw <= 0 ? 0 : raw < 3 ? 2 : raw < 6 ? 4 : Math.round(raw / 4) * 4);
     const span = settings.bars >= 4 ? 32 : 16;
     const ends = [];
     for (let end = span; end <= total; end += span) ends.push(end);
@@ -389,10 +389,13 @@
     return Object.assign({}, event, { segmentCount: 1, lengthRatio: (note.end - note.start) / plan.duration });
   }
 
-  function hits(source, start, offsets, lengths, velocities, semitones) {
+  function hits(source, start, offsets, lengths, velocities, semitones, context) {
+    // A note cut never holds longer than the note itself.
+    const own = context && context.plan && source.segmentCount
+      ? noteCut(context.plan, source.sliceIndex, source.segmentCount, context.stepSeconds).durationSteps : Infinity;
     return offsets.map(function (offset, index) {
       return Object.assign(withCut({ laneId: source.laneId, step: start + offset }, source), {
-        durationSteps: lengths[index], semitones, reverse: false, velocity: velocities[index],
+        durationSteps: Math.min(lengths[index], own), semitones, reverse: false, velocity: velocities[index],
       });
     });
   }
@@ -409,15 +412,18 @@
       result = result.filter(function (event) { return event.step < start || event.step >= fill.end; });
       if (!source) return;
       // Drums roll four rising sixteenths; the lead answers "da, da-da".
-      if (role === 'drums') result = result.concat(hits(source, start, [0, 1, 2, 3], [1, 1, 1, 1], [0.6, 0.68, 0.78, 0.9], 0));
-      else if (role === 'lead') result = result.concat(hits(firstNote(source, context.plan), start, [0, 2, 3], [2, 1, 1], [0.72, 0.84, 0.95], source.semitones));
+      if (role === 'drums') result = result.concat(hits(source, start, [0, 1, 2, 3], [1, 1, 1, 1], [0.6, 0.68, 0.78, 0.9], 0, context));
+      else if (role === 'lead') result = result.concat(hits(firstNote(source, context.plan), start, [0, 2, 3], [2, 1, 1], [0.72, 0.84, 0.95], source.semitones, context));
     });
     if (home && role !== 'fill') {
       ends.landings.forEach(function (step) {
         const index = result.findIndex(function (event) { return event.step === step; });
         const current = index >= 0 ? result[index] : Object.assign({}, home, { step });
-        // Land on the bar-one cut: no octave jump, no reverse, an accent.
-        const landing = Object.assign(withCut(current, home), { semitones: 0, reverse: false, velocity: Math.max(0.9, current.velocity) });
+        // Land on the bar-one cut: no octave jump, no reverse, an accent. The
+        // accent is its own field, so a returning bar keeps its velocity and
+        // its PITCH ENV shape.
+        const landing = Object.assign(withCut(current, home), { semitones: 0, reverse: false, accent: true },
+          context.plan ? { durationSteps: home.durationSteps } : {});
         result = index >= 0 ? result.map(function (event, position) { return position === index ? landing : event; }) : result.concat([landing]);
       });
     }
@@ -425,15 +431,17 @@
     return result.slice().sort(function (first, second) { return first.step - second.step; });
   }
 
-  // FM phrases carry one chord per bar. The first such lane sets the loop's
-  // chords; a run placed in another bar swaps to a note of that bar's chord
-  // in the same position (root, third, fifth or passing step), and the bass
-  // and every landing take the root.
-  function loopChords(lanes) {
-    const lane = lanes.find(function (candidate) {
-      return Array.isArray(candidate.chords) && candidate.chords.length && candidate.chords.every(Number.isInteger) && segmentPlan(candidate);
+  // FM phrases carry one chord per bar. An FM lead sets the loop's chords
+  // (so other parts never re-harmonise it), otherwise the first FM source
+  // does; a run placed in another bar swaps to a note of that bar's chord in
+  // the same position (root, third, fifth or passing step), and the bass and
+  // every landing take the root.
+  function chordLane(lanes, parts) {
+    const usable = (lanes || []).filter(function (candidate) {
+      return candidate && Array.isArray(candidate.chords) && candidate.chords.length && candidate.chords.every(Number.isInteger) && segmentPlan(candidate);
     });
-    return lane ? lane.chords : null;
+    const roleOf = parts || roles(lanes);
+    return usable.find(function (candidate) { return roleOf[candidate.id] === 'lead'; }) || usable[0] || null;
   }
 
   function chordStep(note, root) {
@@ -455,11 +463,13 @@
       // The phrase already replays its two-bar rhythm and contour over each
       // chord, so the note at the same spot of another cycle is the run's own
       // transposed repeat; take it first when it sits over the target chord.
+      const several = (event.segmentCount || 1) > 1;
+      const offGrid = function (note) { return several && Number.isInteger(note.step) && Math.abs(event.step - note.step) % 2 === 1; };
       const rank = function (entry) {
         const away = Math.abs(chordStep(entry.note, target) - wanted);
         const fit = [entry.note.chord === target ? 0 : 1, Math.min(away, 7 - away)];
         const repeat = !rooted && entry.note.chord === target && Number.isInteger(current.step) && entry.note.step % 32 === current.step % 32 ? 0 : 1;
-        return [repeat].concat(rooted ? fit.reverse() : fit, [Math.abs(entry.index - event.sliceIndex), entry.index]);
+        return [repeat].concat(rooted ? fit.reverse() : fit, [offGrid(entry.note) ? 1 : 0, Math.abs(entry.index - event.sliceIndex), entry.index]);
       };
       const notes = plan.notes.map(function (note, index) { return { note, index, key: null }; }).filter(function (entry) {
         return entry.note.chord === target || chordStep(entry.note, target) === wanted;
@@ -470,8 +480,13 @@
         for (let index = 0; index < first.key.length; index += 1) if (first.key[index] !== second.key[index]) return first.key[index] - second.key[index];
         return 0;
       });
-      const cut = noteCut(plan, notes[0].index, event.segmentCount || 1, context.stepSeconds);
-      return Object.assign({}, event, cut, { durationSteps: Math.min(event.durationSteps, cut.durationSteps) });
+      // A run of several notes that would leave its eighth-note grid plays
+      // only its first note, as in the units themselves.
+      const cut = noteCut(plan, notes[0].index, offGrid(notes[0].note) ? 1 : event.segmentCount || 1, context.stepSeconds);
+      // The swapped run keeps its own length unless the original was cut short
+      // on purpose (an answer bar's ending or a stutter hit).
+      const own = noteCut(plan, event.sliceIndex, event.segmentCount || 1, context.stepSeconds).durationSteps;
+      return Object.assign({}, event, cut, { durationSteps: event.durationSteps >= own ? cut.durationSteps : Math.min(event.durationSteps, cut.durationSteps) });
     });
   }
 
@@ -550,7 +565,18 @@
     const occupancy = new Uint8Array(params.bars * 16);
     const onsets = new Uint8Array(params.bars * 16);
     const ends = phrasePlan(params, seed);
-    const chords = loopChords(list);
+    // A fill needs someone to play it: without drums the lead stutters, and
+    // without a lead the drums roll.
+    const hasDrums = list.some(function (lane) { return parts[lane.id] === 'drums'; });
+    const hasLead = list.some(function (lane) { return parts[lane.id] === 'lead'; });
+    ends.fills = ends.fills.map(function (fill) {
+      const roll = fill.device !== 'stutter' && hasDrums;
+      const stutter = fill.device !== 'roll' && hasLead;
+      const device = roll && stutter ? 'both' : roll ? 'roll' : stutter ? 'stutter' : hasDrums ? 'roll' : hasLead ? 'stutter' : fill.device;
+      return Object.assign({}, fill, { device });
+    });
+    const source = chordLane(list, parts);
+    const chords = source ? source.chords : null;
     const byLane = new Map();
     list.filter(function (lane) { return parts[lane.id] === 'lead'; }).forEach(function (lane) {
       const events = generateLane(lane, params, seed, { role: 'lead', ends, chords });
@@ -580,5 +606,5 @@
     return { A: 'A', A2: 'A′', B: 'B', B2: 'B′' }[formUnit(bar, Math.round(bounded(bars, defaults.bars, 1, 16)))];
   }
 
-  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames, phraseEnds, formLabel });
+  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames, phraseEnds, formLabel, chordLane });
 })(typeof window !== 'undefined' ? window : globalThis);

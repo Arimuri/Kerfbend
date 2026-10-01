@@ -282,7 +282,7 @@
         const own = function (id) { return events.filter(function (event) { return event.laneId === id; }); };
         const label = bars + ' bars / breaks ' + breaks + ' / ' + seed;
         const raw = total * 0.5 * breaks / 100;
-        const restLength = Math.min(total / 2, raw < 1.5 ? 0 : raw < 3 ? 2 : raw < 6 ? 4 : Math.round(raw / 4) * 4);
+        const restLength = Math.min(total / 2, raw <= 0 ? 0 : raw < 3 ? 2 : raw < 6 ? 4 : Math.round(raw / 4) * 4);
         const span = bars >= 4 ? 32 : 16;
         if (breaks === 0) {
           assert(plan.rest === null && plan.fills.length === 0 && plan.landings.length === 0, 'BREAKS 0 keeps a continuous loop without rests or fills: ' + label);
@@ -330,7 +330,7 @@
             const lane = own(id);
             const landing = lane.find(function (event) { return event.step === step; });
             const home = lane.find(function (event) { return event.step === 0; }) || landing;
-            assert(landing && cutOf(landing) === cutOf(home) && landing.semitones === 0 && !landing.reverse && landing.velocity >= 0.9,
+            assert(landing && cutOf(landing) === cutOf(home) && landing.semitones === 0 && !landing.reverse && landing.accent === true,
               'The next downbeat lands on the home cut without octave or reverse: ' + id + ' / ' + label);
           });
         });
@@ -346,6 +346,24 @@
     }
     assert(pushes / downbeats > 0.15 && pushes / downbeats < 0.85, 'The lead sometimes enters B after the downbeat: ' + pushes + '/' + downbeats);
     assert(JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30 }), 'SAME')) === JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30, density: 10, size: 90 }), 'SAME')), 'Phrase ends depend only on bars, BREAKS and SEED');
+    assert([1, 2, 4, 8].every(function (bars) {
+      const breath = generator.phraseEnds(Object.assign({}, settings, { bars, breaks: 1 }), 'BREATH').rest;
+      return breath && breath.end - breath.start === 2;
+    }), 'Any BREAKS above zero breathes for at least an eighth note');
+    const noDrums = [band[0], band[2]];
+    const noLead = [band[2], band[3]];
+    for (let index = 0; index < 12; index += 1) {
+      const fillSettings = Object.assign({}, settings, { breaks: 15, density: 80 });
+      const fills = generator.phraseEnds(fillSettings, 'NO-PART-' + index).fills;
+      const leadOnly = generator.generate(noDrums, fillSettings, 'NO-PART-' + index).filter(function (event) { return event.laneId === 'vox'; });
+      const drumsOnly = generator.generate(noLead, fillSettings, 'NO-PART-' + index).filter(function (event) { return event.laneId === 'kit'; });
+      fills.forEach(function (fill) {
+        const end = fill.end;
+        assert([0, 2, 3].every(function (offset) { return leadOnly.some(function (event) { return event.step === end - 4 + offset; }); }) &&
+          !leadOnly.some(function (event) { return event.step === end - 3; }), 'Without drums every fill is a lead stutter: NO-PART-' + index);
+        assert([0, 1, 2, 3].every(function (offset) { return drumsOnly.some(function (event) { return event.step === end - 4 + offset; }); }), 'Without a lead every fill is a drum roll: NO-PART-' + index);
+      });
+    }
     const synth = root.BlueLoopFMSynth;
     if (synth) {
       const fmLane = function (id, octave, progression, seed) {
@@ -396,6 +414,39 @@
         }
       });
       assert(followed > 1000, 'Enough cuts were checked against the chords: ' + followed);
+      let swapped = 0;
+      let swappedOnGrid = 0;
+      ['I-IV', 'vi-IV-V-I', 'IV-V-iii-vi'].forEach(function (progression) {
+        for (let index = 0; index < 12; index += 1) {
+          const lane = fmLane('fm-grid', 4, progression, 'GRID-' + index);
+          [50, 75, 100].forEach(function (size) {
+            const events = generator.generate([lane], Object.assign({}, settings, { size, density: 90, breaks: 15 }), 'GRID-' + index);
+            const rest = generator.phraseEnds(Object.assign({}, settings, { breaks: 15 }), 'GRID-' + index).rest;
+            events.forEach(function (event, position) {
+              const first = lane.segments[event.sliceIndex];
+              const last = lane.segments[event.sliceIndex + event.segmentCount - 1];
+              if (event.segmentCount > 1) {
+                swapped += 1;
+                if ((event.step - first.step) % 2 === 0) swappedOnGrid += 1;
+              }
+              const natural = last.step + last.steps - first.step;
+              const end = event.step + event.durationSteps;
+              const next = position + 1 < events.length ? events[position + 1].step : 64;
+              assert(event.durationSteps <= natural && (event.durationSteps === natural || end === next || end === 64 || end % 16 === 12 || (rest && end === rest.start)),
+                'A chord swap keeps the run playing to its end unless the next onset, an answer ending, the rest or the loop end cuts it: ' + progression + ' / ' + size + ' @' + event.step);
+            });
+          });
+        }
+      });
+      assert(swapped > 200 && swappedOnGrid === swapped, 'Chord swaps keep every run of several notes on its eighth-note grid: ' + swappedOnGrid + '/' + swapped);
+      for (let index = 0; index < 10; index += 1) {
+        const fmBass = fmLane('fm-low', 2, 'I-IV', 'LOW-' + index);
+        const fmLead = fmLane('fm-top', 4, 'vi-IV-V-I', 'TOP-' + index);
+        const loop = Object.assign({}, settings, { breaks: 15, density: 80 });
+        const together = generator.generate([fmBass, fmLead], loop, 'TOGETHER-' + index).filter(function (event) { return event.laneId === 'fm-top'; });
+        assert(JSON.stringify(together) === JSON.stringify(generator.generate([fmLead], loop, 'TOGETHER-' + index)) && generator.chordLane([fmBass, fmLead]).id === 'fm-top',
+          'An FM lead follows its own chords, so other FM sources never change it: ' + index);
+      }
       let multi = 0;
       let aligned = 0;
       let repeats = 0;

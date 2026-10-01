@@ -458,6 +458,28 @@
       assert(maximumDifference(first, second) === 0 && Math.abs(playback.envelope.depth) <= 12 && playback.duration === Math.min(playback.envelope.durationFor(playback.sliceSeconds), 4 * 60 / 120 / 4),
         'Randomized depth and time must render deterministically and share the playback duration');
     });
+    await test('A lengthened bend settles within the first note of an FM run', async function () {
+      var source = engine.createFMSource({ bpm: 120, bars: 2, tonic: 0, octave: 4, density: 90, seed: 'BEND-RUN' });
+      var lane = Object.assign({ id: 'fm-bend', kind: 'fm', category: 'other', buffer: source.buffer, volume: 1, keyShift: 0, releaseSeconds: 0.03, pitchEnvChance: 100 },
+        global.BlueLoopFMSynth.noteSegments(source.phrase));
+      var config = Object.assign({}, global.BlueLoopGenerator.defaults, { bpm: 120, bars: 2, density: 100, breaks: 0, size: 100, pitchEnvDepth: 12, pitchEnvTime: 80, pitchEnvTimeRandom: 100 });
+      var runs = global.BlueLoopGenerator.generate([lane], config, 'BEND-RUN').filter(function (event) { return event.segmentCount > 1; });
+      assert(runs.length > 2, 'The fixture has no runs of several notes');
+      assert(runs.every(function (event) {
+        var playback = global.BlueLoopAudio.eventPlayback(lane, event, config);
+        var first = lane.segments[event.sliceIndex];
+        return playback.envelope.decaySeconds <= Math.max(0.08, 0.7 * first.steps * 0.125) + 1e-9;
+      }), 'A lengthened bend ran into the next note of a run');
+    });
+    await test('Landing accents raise the level without changing the stored velocity', async function () {
+      var buffer = engine.context.createBuffer(1, 44100, 44100);
+      buffer.getChannelData(0).fill(0.5);
+      var lane = { id: 'accent', buffer: buffer, volume: 1 };
+      var plain = await engine.render([lane], { bpm: 120, bars: 1, chop: 1 }, [{ laneId: 'accent', step: 0, sliceIndex: 0, durationSteps: 4, velocity: 0.8 }]);
+      var accented = await engine.render([lane], { bpm: 120, bars: 1, chop: 1 }, [{ laneId: 'accent', step: 0, sliceIndex: 0, durationSteps: 4, velocity: 0.8, accent: true }]);
+      var middle = Math.round(0.25 * 44100);
+      assert(Math.abs(accented.getChannelData(0)[middle] / plain.getChannelData(0)[middle] - 1.12) < 1e-4, 'The landing accent did not raise the level by 12%');
+    });
     await test('Swung forward and reverse audio follows the shared envelope source-position helper', async function () {
       var fixture = envelopeFixture(1, { swing: 50, pitchEnvTime: 83 });
       var data = fixture.lane.buffer.getChannelData(0);

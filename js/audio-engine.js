@@ -83,8 +83,12 @@
     // Each lane sets how often its slices receive the shared pitch envelope.
     var envelopeSettings = lane.pitchEnvChance == null ? settings
       : Object.assign({}, settings, { pitchEnvChance: lane.pitchEnvChance });
+    // In a run of several FM notes, a lengthened bend settles within the first note.
+    var envelopeEvent = event;
+    var first = Array.isArray(lane.segments) && number(event.segmentCount, 1) > 1 ? lane.segments[event.sliceIndex] : null;
+    if (first && Number.isInteger(first.steps)) envelopeEvent = Object.assign({}, event, { durationSteps: Math.min(number(event.durationSteps, 1), first.steps) });
     var envelope = global.BlueLoopPitchEnvelope
-      ? global.BlueLoopPitchEnvelope.create(rate, event, envelopeSettings, start, SAMPLE_RATE)
+      ? global.BlueLoopPitchEnvelope.create(rate, envelopeEvent, envelopeSettings, start, SAMPLE_RATE)
       : {
         enabled: false, depth: 0, baseRate: rate, startRate: rate, decaySeconds: 0,
         points: [{ time: 0, rate: rate }],
@@ -357,7 +361,7 @@
         if (!playback) return;
         scheduled.push(Object.assign({}, playback, {
           lane: lane, event: event,
-          gain: clamp(number(lane.volume, 0.7), 0, 1.5) * clamp(number(event.velocity, 0.8), 0, 1)
+          gain: clamp(number(lane.volume, 0.7), 0, 1.5) * clamp(number(event.velocity, 0.8) * (event.accent ? 1.12 : 1), 0, 1)
         }));
       });
       var glitch = global.BlueLoopGlitch ? global.BlueLoopGlitch.plan(settings, settings.phraseSeed) : null;

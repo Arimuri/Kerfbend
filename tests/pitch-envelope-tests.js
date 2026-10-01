@@ -187,6 +187,23 @@
       rerolled.filter(function (curve, index) { return curve.depth !== original[index].depth; }).length > 400 &&
       Math.abs(rerolled.filter(function (curve) { return curve.enabled; }).length / rerolled.length - 0.5) < 0.05,
     'A re-roll seed picks a new pattern with the same chance, and an empty seed keeps the original');
+    const generator = root.BlueLoopGenerator;
+    if (generator) {
+      const band = [{ id: 'vox', kind: 'voice', name: 'GLASS VOICE' }, { id: 'low', kind: 'bass', name: 'ROUND BASS' }, { id: 'kit', kind: 'drums', category: 'drums', name: 'DUST DRUMS' }];
+      let pairs = 0;
+      for (let index = 0; index < 20; index += 1) {
+        const events = generator.generate(band, Object.assign({}, generator.defaults, { breaks: 15 }), 'RETURN-' + index);
+        events.filter(function (item) { return item.step === 0; }).forEach(function (opening) {
+          const returning = events.find(function (item) { return item.laneId === opening.laneId && item.step === 48; });
+          if (!returning || returning.sliceIndex !== opening.sliceIndex || returning.startRatio !== opening.startRatio) return;
+          pairs += 1;
+          const a = envelope.create(1, opening, formSettings);
+          const b = envelope.create(1, returning, formSettings);
+          assert(a.enabled === b.enabled && a.depth === b.depth && a.decaySeconds === b.decaySeconds, 'The returning A downbeat bends like bar one, landing accent included: RETURN-' + index);
+        });
+      }
+      assert(pairs > 10, 'Enough returning downbeats were compared: ' + pairs);
+    }
     const spreadSettings = { pitchEnvDepth: 12, pitchEnvTime: 80, pitchEnvDepthRandom: 70, pitchEnvTimeRandom: 70, pitchEnvChance: 60 };
     const spreadCurve = envelope.create(1, slices[7], spreadSettings);
     assert(controls.every(function (change) {

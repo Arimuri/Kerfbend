@@ -90,7 +90,9 @@
       else if (step % 4 === 0) degree = chordTone(degree, root, draw.direction);
       else {
         const move = draw.direction < 0.3 ? -1 : draw.direction < 0.45 ? 0 : draw.direction < 0.75 ? 1 : draw.direction < 0.88 ? -2 : 2;
-        degree = Math.max(LOWEST, Math.min(HIGHEST, degree + move));
+        // Reflect off the edges, so a line turns back instead of sitting on them.
+        const next = degree + move;
+        degree = next < LOWEST ? 2 * LOWEST - next : next > HIGHEST ? 2 * HIGHEST - next : next;
       }
       degrees.push(degree);
     });
