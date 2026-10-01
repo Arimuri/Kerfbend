@@ -54,16 +54,16 @@
 .fm-controls label>span{display:flex;align-items:center;justify-content:space-between;gap:5px}
 .fm-controls select,.fm-meta input{width:100%;min-width:0;padding:8px;border:1px solid #d3ddf5;border-radius:4px;background:#f8faff;color:var(--ink);font:11px var(--mono)}
 .fm-controls output{color:var(--blue);font:12px var(--mono);white-space:nowrap}
-.fm-controls small{font-size:8px;color:#8994a8;line-height:1.5}
+.fm-controls small{font-size:8px;color:#8994a8;line-height:1.5}.fm-controls .fm-progression{grid-column:span 2}
 .fm-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 14px;font:9px var(--mono);color:#71809c}
 .fm-meta label{display:flex;align-items:center;gap:8px;min-width:0}
 .fm-meta input{width:112px;padding:6px}
 .fm-meta>span{white-space:nowrap}
-.fm-notes{display:block;width:100%;height:auto;border:1px solid #dce3f1;border-radius:4px;background:#f8faff}
+.fm-notes{display:block;width:100%;height:auto;border:1px solid #dce3f1;border-radius:4px;background:#f8faff}.fm-notes .fm-chord{font:8px var(--mono);fill:#8592ab}
 .fm-status{font-size:10px;line-height:1.7;color:#71809c;min-height:34px;margin:12px 0}
 .fm-preview-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .fm-preview-actions button{padding:11px 8px;border-radius:4px;font-size:11px}
 .fm-add-button{width:100%;margin-top:12px;padding:13px 10px;border-radius:4px;border-color:var(--blue);background:var(--blue);color:white;font-size:12px}
 .fm-add-button:hover:not(:disabled){background:#1c3dcc}
 @media(min-width:541px) and (max-width:800px){.source-actions{grid-column:2;margin-top:12px}}
-@media(max-width:540px){#fm-dialog{padding:20px}.fm-controls{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 14px}.fm-meta{flex-wrap:wrap;gap:10px}.fm-preview-actions button{font-size:10px}.fm-source-button{font-size:11px}.source-actions{margin-top:14px}}
+@media(max-width:540px){#fm-dialog{padding:20px}.fm-controls{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 14px}.fm-controls .fm-progression{grid-column:1/-1}.fm-meta{flex-wrap:wrap;gap:10px}.fm-preview-actions button{font-size:10px}.fm-source-button{font-size:11px}.source-actions{margin-top:14px}}

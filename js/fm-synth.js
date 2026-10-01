@@ -3,7 +3,18 @@
 
   const SAMPLE_RATE = 44100;
   const TAU = Math.PI * 2;
-  const MAJOR = [0, 2, 4, 5, 7, 9, 11, 12];
+  const SCALE = [0, 2, 4, 5, 7, 9, 11];
+  // One chord per bar, written as the major-scale degree of each chord root.
+  const PROGRESSIONS = Object.freeze({
+    'I': Object.freeze([0]),
+    'I-IV': Object.freeze([0, 3]),
+    'I-V': Object.freeze([0, 4]),
+    'vi-IV': Object.freeze([5, 3]),
+    'IV-V-iii-vi': Object.freeze([3, 4, 2, 5]),
+    'vi-IV-V-I': Object.freeze([5, 3, 4, 0]),
+  });
+  const LOWEST = 0;
+  const HIGHEST = 9;
 
   function bounded(value, fallback, minimum, maximum) {
     const number = value == null ? fallback : Number(value);
@@ -22,8 +33,57 @@
       index: bounded(input.index, 0, 0, 8),
       ratio: Math.round(bounded(input.ratio, 2, 1, 4)),
       decay: bounded(input.decay, 300, 40, 1200),
-      seed: String(input.seed == null ? 'FM-001' : input.seed).trim().slice(0, 256) || 'FM-001'
+      seed: String(input.seed == null ? 'FM-001' : input.seed).trim().slice(0, 256) || 'FM-001',
+      progression: Object.prototype.hasOwnProperty.call(PROGRESSIONS, input.progression) ? input.progression : 'I'
     };
+  }
+
+  function semitonesOf(degree) {
+    return 12 * Math.floor(degree / 7) + SCALE[((degree % 7) + 7) % 7];
+  }
+
+  function inChord(degree, root) {
+    return [0, 2, 4].includes((((degree - root) % 7) + 7) % 7);
+  }
+
+  // Strong beats move to the nearest chord tone in the drawn direction.
+  function chordTone(degree, root, draw) {
+    const tones = [];
+    for (let candidate = LOWEST; candidate <= HIGHEST; candidate++) if (inChord(candidate, root)) tones.push(candidate);
+    const above = tones.filter(function (tone) { return tone >= degree; });
+    const below = tones.filter(function (tone) { return tone <= degree; });
+    if (draw < 0.5) return above.length ? above[0] : below[below.length - 1];
+    return below.length ? below[below.length - 1] : above[0];
+  }
+
+  // Bar downbeats sound the root, fifth or third closest to the line.
+  function downbeat(degree, root, draw, first) {
+    const offset = first || draw < 0.55 ? 0 : draw < 0.8 ? 4 : 2;
+    if (first) return root;
+    let best = null;
+    for (let candidate = LOWEST; candidate <= HIGHEST; candidate++) {
+      if ((((candidate - root - offset) % 7) + 7) % 7) continue;
+      if (best === null || Math.abs(candidate - degree) < Math.abs(best - degree)) best = candidate;
+    }
+    return best;
+  }
+
+  // The two-bar contour is realised over each cycle's chords: strong beats
+  // take chord tones and the steps between them pass or turn by scale steps.
+  function realize(draws, roots) {
+    const degrees = [];
+    let degree = roots[0];
+    draws.forEach(function (draw, step) {
+      const root = roots[Math.floor(step / 16)];
+      if (step % 16 === 0) degree = downbeat(degree, root, draw.direction, step === 0);
+      else if (step % 4 === 0) degree = chordTone(degree, root, draw.direction);
+      else {
+        const move = draw.direction < 0.3 ? -1 : draw.direction < 0.45 ? 0 : draw.direction < 0.75 ? 1 : draw.direction < 0.88 ? -2 : 2;
+        degree = Math.max(LOWEST, Math.min(HIGHEST, degree + move));
+      }
+      degrees.push(degree);
+    });
+    return degrees;
   }
 
   // FNV-1a seeds Mulberry32, also used by the loop generator.
@@ -46,8 +106,10 @@
     const stepSeconds = 60 / settings.bpm / 4;
     const totalSteps = settings.bars * 16;
     const base = 12 * (settings.octave + 1) + settings.tonic;
+    const roots = PROGRESSIONS[settings.progression];
+    const chords = Array.from({ length: settings.bars }, function (_, bar) { return roots[bar % roots.length]; });
+    const draws = [];
     const motif = [];
-    let degree = 0;
 
     // Make a two-bar call and answer. Draw every candidate's values so density
     // only removes or adds notes; changing the timbre never rerolls the phrase.
@@ -57,21 +119,22 @@
       const gate = [1, 2, 2, 3, 4, 6, 8][Math.floor(random() * 7)];
       const velocity = 0.66 + random() * 0.23 + (step % 4 === 0 ? 0.08 : 0);
       const weight = step % 4 === 0 ? 1 : step % 2 === 0 ? 0.82 : 0.38;
-      if (step % 16 === 0) degree = step === 0 ? 0 : direction < 0.55 ? 0 : 4;
-      else degree = Math.max(0, Math.min(7, degree + (direction < 0.23 ? -2 : direction < 0.49 ? -1 : direction < 0.65 ? 0 : direction < 0.9 ? 1 : 2)));
+      draws.push({ direction });
       if (step % 16 === 0 || chance < settings.density / 100 * weight) {
-        motif.push({ step, degree, gate, velocity });
+        motif.push({ step, gate, velocity });
       }
     }
 
     const candidates = [];
     for (let cycle = 0; cycle < settings.bars / 2; cycle++) {
+      // Each cycle replays the rhythm and contour over its own two chords.
+      const degrees = realize(draws, [chords[cycle * 2], chords[cycle * 2 + 1]]);
       motif.forEach(function (note) {
         const variation = random();
-        let degree = note.degree;
-        // Preserve the call; occasionally move one scale step in the answer.
-        if (cycle > 0 && note.step > 16 && variation < 0.3) {
-          degree = Math.max(0, Math.min(7, degree + (variation < 0.15 ? -1 : 1)));
+        let degree = degrees[note.step];
+        // Preserve the call; occasionally move a passing note in the answer.
+        if (cycle > 0 && note.step > 16 && note.step % 4 && variation < 0.3) {
+          degree = Math.max(LOWEST, Math.min(HIGHEST, degree + (variation < 0.15 ? -1 : 1)));
         }
         candidates.push({ step: cycle * 32 + note.step, degree, gate: note.gate, velocity: note.velocity });
       });
@@ -83,14 +146,15 @@
       return {
         start: note.step * stepSeconds,
         duration: steps * stepSeconds,
-        midi: base + MAJOR[note.degree],
+        midi: base + semitonesOf(note.degree),
         velocity: note.velocity,
         step: note.step,
         steps,
-        degree: note.degree
+        degree: note.degree,
+        chord: chords[Math.floor(note.step / 16)]
       };
     });
-    return { settings, duration: totalSteps * stepSeconds, notes };
+    return { settings, duration: totalSteps * stepSeconds, notes, chords };
   }
 
   // Each synthesized note starts and ends at silence, so its boundaries are
@@ -98,12 +162,13 @@
   function noteSegments(result) {
     const duration = Number(result && result.duration);
     const notes = result && Array.isArray(result.notes) ? result.notes : [];
-    if (!(duration > 0)) return { segments: [], segmentsDuration: 0 };
+    if (!(duration > 0)) return { segments: [], segmentsDuration: 0, chords: [] };
     return {
       segmentsDuration: duration,
       segments: notes.map(function (note) {
-        return { start: note.start, end: note.start + note.duration, step: note.step, midi: note.midi, degree: note.degree };
-      })
+        return { start: note.start, end: note.start + note.duration, step: note.step, midi: note.midi, degree: note.degree, chord: note.chord };
+      }),
+      chords: Array.isArray(result.chords) ? result.chords.slice() : []
     };
   }
 
@@ -151,5 +216,5 @@
     return { buffer, phrase: result };
   }
 
-  root.BlueLoopFMSynth = Object.freeze({ normalize, phrase, synthesize, noteSegments });
+  root.BlueLoopFMSynth = Object.freeze({ normalize, phrase, synthesize, noteSegments, progressions: PROGRESSIONS, semitonesOf });
 })(typeof window !== 'undefined' ? window : globalThis);

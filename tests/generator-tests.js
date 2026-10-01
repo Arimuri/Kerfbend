@@ -309,6 +309,65 @@
     }
     assert(fillsSeen > 20 && restsSeen > 20 && landingsSeen > 20, 'Fills, rests and landings all occur: ' + [fillsSeen, restsSeen, landingsSeen].join('/'));
     assert(JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30 }), 'SAME')) === JSON.stringify(generator.phraseEnds(Object.assign({}, settings, { breaks: 30, density: 10, size: 90 }), 'SAME')), 'Phrase ends depend only on bars, BREAKS and SEED');
+    const synth = root.BlueLoopFMSynth;
+    if (synth) {
+      const fmLane = function (id, octave, progression, seed) {
+        const phrase = synth.phrase({ seed, bars: 4, octave, density: 70, progression });
+        return Object.assign({ id, kind: 'fm', name: 'SINE', synthSettings: phrase.settings }, synth.noteSegments(phrase));
+      };
+      const position = function (degree, root) { return (((degree - root) % 7) + 7) % 7; };
+      let followed = 0;
+      ['I-IV', 'vi-IV-V-I', 'IV-V-iii-vi'].forEach(function (progression) {
+        for (let index = 0; index < 10; index += 1) {
+          const lead = fmLane('fm-lead', 4, progression, 'LEAD-' + index);
+          const bassLane = fmLane('fm-bass', 2, progression, 'BASS-' + index);
+          [4, 8].forEach(function (bars) {
+            [0, 15].forEach(function (breaks) {
+              const loop = Object.assign({}, settings, { bars, breaks, density: 80 });
+              const seed = 'CHORDS-' + index;
+              const events = generator.generate([lead, bassLane], loop, seed);
+              const parts = generator.roles([lead, bassLane]);
+              const label = progression + ' / ' + bars + ' bars / breaks ' + breaks + ' / ' + seed;
+              assert(parts['fm-lead'] === 'lead' && parts['fm-bass'] === 'bass', 'Low FM phrases play bass and higher ones lead: ' + label);
+              events.forEach(function (event) {
+                const lane = event.laneId === 'fm-lead' ? lead : bassLane;
+                const note = lane.segments[event.sliceIndex];
+                const chord = lead.chords[Math.floor(event.step / 16) % lead.chords.length];
+                const rooted = (event.laneId === 'fm-bass' && event.step % 16 === 0) || generator.phraseEnds(loop, seed).landings.includes(event.step);
+                assert(rooted ? [0, 2, 4].includes(position(note.degree, chord)) || note.chord === chord : note.chord === chord,
+                  'A cut plays a note written over (or, for roots, belonging to) the chord of the bar it lands in: ' + label + ' @' + event.step);
+                followed += 1;
+              });
+              const landings = generator.phraseEnds(loop, seed).landings;
+              const rootOf = function (lane, step) {
+                const chord = lead.chords[Math.floor(step / 16) % lead.chords.length];
+                return { chord, available: lane.segments.some(function (note) { return position(note.degree, chord) === 0; }) };
+              };
+              events.filter(function (event) { return event.laneId === 'fm-bass' && event.step % 16 === 0; }).forEach(function (event) {
+                const target = rootOf(bassLane, event.step);
+                const note = bassLane.segments[event.sliceIndex];
+                assert(!target.available || position(note.degree, target.chord) === 0, 'The bass plays the chord root on every downbeat: ' + label + ' @' + event.step);
+              });
+              landings.forEach(function (step) {
+                const landing = events.find(function (event) { return event.laneId === 'fm-lead' && event.step === step; });
+                const target = rootOf(lead, step);
+                if (landing && target.available) assert(position(lead.segments[landing.sliceIndex].degree, target.chord) === 0, 'The lead lands on the chord root: ' + label);
+              });
+              assert(JSON.stringify(events) === JSON.stringify(generator.generate([lead, bassLane], loop, seed)), 'Chord following is deterministic: ' + label);
+            });
+          });
+        }
+      });
+      assert(followed > 1000, 'Enough cuts were checked against the chords: ' + followed);
+      const lead = fmLane('fm-lead', 4, 'I-IV', 'LEAD-X');
+      const plain = Object.assign({}, lead);
+      delete plain.chords;
+      const withChords = generator.generate([lead], Object.assign({}, settings, { breaks: 0 }), 'CHORD-OFF');
+      const without = generator.generate([plain], Object.assign({}, settings, { breaks: 0 }), 'CHORD-OFF');
+      assert(withChords.length === without.length && withChords.every(function (event, index) {
+        return event.step === without[index].step && event.velocity === without[index].velocity && event.semitones === without[index].semitones;
+      }), 'Following chords changes which notes play, never the rhythm, octave or dynamics');
+    }
     return { passed: assertions.length, assertions };
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -12,6 +12,8 @@
   const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
   const envelopeChances = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
   const roleLabels = { lead: '主役', bass: 'ベース', fill: '合いの手', drums: 'ドラム' };
+  const progressionLabels = { I: '同じコード（I）', 'I-IV': '2コード往復（I–IV）', 'I-V': '2コード往復（I–V）', 'vi-IV': '2コード往復（vi–IV）', 'IV-V-iii-vi': '王道進行（IV–V–iii–vi）', 'vi-IV-V-I': '小室進行（vi–IV–V–I）' };
+  const scaleSteps = [0, 2, 4, 5, 7, 9, 11];
   const history = [];
   const peaks = new WeakMap();
   let renderVersion = 0;
@@ -290,7 +292,8 @@
       row.querySelector('.source-title').title = filename;
       const entry = keyPlan.byId[lane.id];
       const sourceName = { filename: 'ファイル名', analysis: '音声推定', manual: '手動', demo: 'デモ設定', synth: '合成設定' }[entry.key.source] || '未判定';
-      const detail = `${lane.buffer.duration.toFixed(2)}s / ${lane.kind === 'upload' ? 'YOUR SOUND' : lane.kind === 'fm' ? 'FM SYNTH' : 'SYNTH DEMO'} · ${sourceName}`;
+      const progression = lane.kind === 'fm' && lane.synthSettings ? ` ${(lane.synthSettings.progression || 'I').replace(/-/g, '–')}` : '';
+      const detail = `${lane.buffer.duration.toFixed(2)}s / ${lane.kind === 'upload' ? 'YOUR SOUND' : lane.kind === 'fm' ? `FM SYNTH${progression}` : 'SYNTH DEMO'} · ${sourceName}`;
       row.querySelector('.source-detail').textContent = detail;
       row.querySelector('.source-detail').title = detail;
       const categorySelect = row.querySelector('.source-category');
@@ -702,6 +705,7 @@
       tonic: Number($('fm-key').value.split(':')[0]), octave: Number($('fm-octave').value),
       ratio: Number($('fm-ratio').value), index: Number($('fm-index').value),
       decay: Number($('fm-decay').value), density: Number($('fm-density').value), seed: $('fm-seed').value,
+      progression: $('fm-progression').value,
     });
   }
 
@@ -712,7 +716,7 @@
   }
 
   function updateFMControls() {
-    ['key', 'octave', 'ratio', 'index', 'decay', 'density', 'seed', 'reroll', 'preview'].forEach((id) => { $(`fm-${id}`).disabled = fmBusy; });
+    ['key', 'progression', 'octave', 'ratio', 'index', 'decay', 'density', 'seed', 'reroll', 'preview'].forEach((id) => { $(`fm-${id}`).disabled = fmBusy; });
     $('fm-add').disabled = fmBusy || !fmDraft || importing || !!fmCapacityError(fmDraft.buffer.duration);
     $('fm-preview').textContent = fmBusy ? '合成中…' : fmPreviewSource ? '■ 試聴を停止' : fmDraft ? '▶ 元フレーズを試聴' : '▶ 生成・試聴';
     $('fm-dialog').setAttribute('aria-busy', String(fmBusy));
@@ -738,7 +742,21 @@
     const duration = options.bars * 4 * 60 / options.bpm;
     $('fm-length').textContent = `${options.bpm} BPM / ${options.bars} bars / ${duration.toFixed(2)} s`;
     $('fm-status').textContent = fmCapacityError(duration) || '「生成・試聴」で元のフレーズを確認できます。';
+    const shared = sharedProgression();
+    $('fm-progression-note').textContent = shared && shared !== options.progression
+      ? `ループのコードは最初のFM素材（${progressionLabels[shared]}）に合わせて並べます`
+      : '1小節ごとにコードが変わり、拍の頭はコードの音になります';
     updateFMControls();
+  }
+
+  // Existing FM sources set the loop's chords, so new phrases default to them.
+  function sharedProgression() {
+    const lane = state.lanes.find((entry) => entry.kind === 'fm' && entry.synthSettings);
+    return lane ? lane.synthSettings.progression || 'I' : null;
+  }
+
+  function chordName(tonic, root) {
+    return `${harmony.notes[(tonic + scaleSteps[root % 7]) % 12]}${[1, 2, 5].includes(root % 7) ? 'm' : root % 7 === 6 ? 'dim' : ''}`;
   }
 
   function drawFMNotes(phrase) {
@@ -755,12 +773,20 @@
       const x = 8 + bar / phrase.settings.bars * 544;
       add('line', { x1: x, x2: x, y1: 6, y2: 82, stroke: '#dce3f1' });
     }
+    (phrase.chords || []).forEach((root, bar) => {
+      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      label.setAttribute('x', 11 + bar / phrase.settings.bars * 544);
+      label.setAttribute('y', 84);
+      label.setAttribute('class', 'fm-chord');
+      label.textContent = chordName(phrase.settings.tonic, root);
+      svg.append(label);
+    });
     phrase.notes.forEach((note) => add('rect', {
       x: 8 + note.start / phrase.duration * 544, y: 8 + (high - note.midi) / (high - low) * 64,
       width: Math.max(1, note.duration / phrase.duration * 544 - 1), height: 5, rx: 1,
       fill: '#244ce5', opacity: 0.4 + note.velocity * 0.6,
     }));
-    svg.setAttribute('aria-label', `${phrase.settings.bars}小節、${phrase.notes.length}音のチョップ前のフレーズ`);
+    svg.setAttribute('aria-label', `${phrase.settings.bars}小節、${phrase.notes.length}音のチョップ前のフレーズ。コード：${(phrase.chords || []).map((root) => chordName(phrase.settings.tonic, root)).join(' → ')}`);
   }
 
   async function previewFM(reroll = false) {
@@ -950,10 +976,17 @@
     if (importing || state.lanes.length >= MAX_SOURCES) return;
     stop();
     $('fm-key').value = `${keyPlan.target ? keyPlan.target.tonic : 0}:major`;
+    $('fm-progression').value = sharedProgression() || 'I';
     invalidateFM();
     $('fm-dialog').showModal();
   });
-  ['key', 'octave', 'ratio', 'index', 'decay', 'density', 'seed'].forEach((id) => $(`fm-${id}`).addEventListener('input', invalidateFM));
+  Object.keys(window.BlueLoopFMSynth.progressions).forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = progressionLabels[name] || name;
+    $('fm-progression').append(option);
+  });
+  ['key', 'progression', 'octave', 'ratio', 'index', 'decay', 'density', 'seed'].forEach((id) => $(`fm-${id}`).addEventListener('input', invalidateFM));
   $('fm-preview').addEventListener('click', () => previewFM());
   $('fm-reroll').addEventListener('click', () => previewFM(true));
   $('fm-add').addEventListener('click', addFMSource);

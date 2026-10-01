@@ -361,6 +361,52 @@
     return result.slice().sort(function (first, second) { return first.step - second.step; });
   }
 
+  // FM phrases carry one chord per bar. The first such lane sets the loop's
+  // chords; a run placed in another bar swaps to a note of that bar's chord
+  // in the same position (root, third, fifth or passing step), and the bass
+  // and every landing take the root.
+  function loopChords(lanes) {
+    const lane = lanes.find(function (candidate) {
+      return Array.isArray(candidate.chords) && candidate.chords.length && candidate.chords.every(Number.isInteger) && segmentPlan(candidate);
+    });
+    return lane ? lane.chords : null;
+  }
+
+  function chordStep(note, root) {
+    return (((note.degree - root) % 7) + 7) % 7;
+  }
+
+  function followChords(events, context, chords, role, landings) {
+    const plan = context.plan;
+    if (!plan || !chords || !plan.notes.every(function (note) { return Number.isInteger(note.degree) && Number.isInteger(note.chord); })) return events;
+    return events.map(function (event) {
+      const target = chords[Math.floor(event.step / 16) % chords.length];
+      const current = plan.notes[event.sliceIndex];
+      const rooted = (role === 'bass' && event.step % 16 === 0) || landings.includes(event.step);
+      const wanted = rooted ? 0 : chordStep(current, current.chord);
+      if (current.chord === target && chordStep(current, target) === wanted) return event;
+      // Prefer notes written over the target chord (so whole runs fit), then
+      // the same chord position, then the nearest place in the source. Roots
+      // for the bass and landings come first wherever they were written.
+      const rank = function (entry) {
+        const away = Math.abs(chordStep(entry.note, target) - wanted);
+        const fit = [entry.note.chord === target ? 0 : 1, Math.min(away, 7 - away)];
+        return (rooted ? fit.reverse() : fit).concat([Math.abs(entry.index - event.sliceIndex), entry.index]);
+      };
+      const notes = plan.notes.map(function (note, index) { return { note, index, key: null }; }).filter(function (entry) {
+        return entry.note.chord === target || chordStep(entry.note, target) === wanted;
+      });
+      if (!notes.length) return event;
+      notes.forEach(function (entry) { entry.key = rank(entry); });
+      notes.sort(function (first, second) {
+        for (let index = 0; index < first.key.length; index += 1) if (first.key[index] !== second.key[index]) return first.key[index] - second.key[index];
+        return 0;
+      });
+      const cut = noteCut(plan, notes[0].index, event.segmentCount || 1, context.stepSeconds);
+      return Object.assign({}, event, cut, { durationSteps: Math.min(event.durationSteps, cut.durationSteps) });
+    });
+  }
+
   function lockedEvents(lane, totalSteps) {
     return lane.events.filter(function (event) {
       return event && Number.isFinite(event.step) && event.step >= 0 && event.step < totalSteps;
@@ -412,6 +458,7 @@
     if (role === 'fill' && part.occupancy) events = answerLead(events, lane, settings, seed, part.occupancy);
     const ends = part && part.ends ? part.ends : phrasePlan(settings, seed);
     events = shapeEnds(events, role, ends, context, home);
+    if (part && part.chords) events = followChords(events, context, part.chords, role, ends.landings);
 
     // Gate before the next onset, the shared rest and, for parts that drop
     // out, the fill beat, avoiding piled-up cuts.
@@ -432,16 +479,17 @@
     // Leads come first so answering parts can hear where the lead sounds.
     const occupancy = new Uint8Array(params.bars * 16);
     const ends = phrasePlan(params, seed);
+    const chords = loopChords(list);
     const byLane = new Map();
     list.filter(function (lane) { return parts[lane.id] === 'lead'; }).forEach(function (lane) {
-      const events = generateLane(lane, params, seed, { role: 'lead', ends });
+      const events = generateLane(lane, params, seed, { role: 'lead', ends, chords });
       events.forEach(function (event) {
         for (let step = event.step; step < Math.min(occupancy.length, event.step + event.durationSteps); step += 1) occupancy[step] = 1;
       });
       byLane.set(lane, events);
     });
     list.filter(function (lane) { return parts[lane.id] !== 'lead'; }).forEach(function (lane) {
-      byLane.set(lane, generateLane(lane, params, seed, { role: parts[lane.id], occupancy, ends }));
+      byLane.set(lane, generateLane(lane, params, seed, { role: parts[lane.id], occupancy, ends, chords }));
     });
     return list.reduce(function (events, lane) { return events.concat(byLane.get(lane)); }, []);
   }

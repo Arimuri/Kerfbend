@@ -57,9 +57,45 @@
     assert(cutPoints.segmentsDuration === phrase.duration && cutPoints.segments.length === phrase.notes.length && cutPoints.segments.every(function (segment, index) {
       const note = phrase.notes[index];
       return segment.start === note.start && near(segment.end, note.start + note.duration) && segment.step === note.step && segment.midi === note.midi && segment.degree === note.degree &&
-        Number.isInteger(note.step) && near(note.start, note.step * stepSeconds) && near(note.duration, note.steps * stepSeconds) && note.midi === 45 + [0, 2, 4, 5, 7, 9, 11, 12][note.degree];
+        Number.isInteger(note.step) && near(note.start, note.step * stepSeconds) && near(note.duration, note.steps * stepSeconds) && note.midi === 45 + synth.semitonesOf(note.degree) && segment.chord === note.chord;
     }), 'Note segments expose every note boundary, grid step and scale degree');
     assert(synth.noteSegments(null).segments.length === 0 && synth.noteSegments({ duration: 0, notes: [] }).segmentsDuration === 0, 'Missing phrases produce no note segments');
+    assert(defaults.progression === 'I' && synth.normalize({ progression: 'nope' }).progression === 'I' && synth.normalize({ progression: 'vi-IV-V-I' }).progression === 'vi-IV-V-I' &&
+      Object.keys(synth.progressions).join(',') === 'I,I-IV,I-V,vi-IV,IV-V-iii-vi,vi-IV-V-I', 'Progressions default to one chord and accept the listed presets');
+    const triad = function (degree, root) { return [0, 2, 4].includes((((degree - root) % 7) + 7) % 7); };
+    let strongNotes = 0;
+    let leaps = 0;
+    let moves = 0;
+    Object.keys(synth.progressions).forEach(function (name) {
+      const roots = synth.progressions[name];
+      for (let seed = 0; seed < 12; seed++) {
+        [4, 8].forEach(function (bars) {
+          const chordPhrase = synth.phrase({ seed: 'CHORD-' + seed, bars, density: 75, progression: name, tonic: 9, octave: 2 });
+          assert(JSON.stringify(chordPhrase.chords) === JSON.stringify(Array.from({ length: bars }, function (_, bar) { return roots[bar % roots.length]; })) &&
+            chordPhrase.notes.every(function (note) { return note.chord === chordPhrase.chords[Math.floor(note.step / 16)]; }), 'Each bar carries its chord: ' + name + ' / ' + seed);
+          assert(chordPhrase.notes.every(function (note) {
+            return note.degree >= 0 && note.degree <= 9 && note.midi === 45 + synth.semitonesOf(note.degree) && (note.step % 4 || triad(note.degree, note.chord));
+          }), 'Notes on the beat are chord tones and every note stays in the major scale: ' + name + ' / ' + seed);
+          assert(chordPhrase.notes[0].step === 0 && chordPhrase.notes[0].degree === roots[0], 'The phrase opens on the first chord root: ' + name + ' / ' + seed);
+          chordPhrase.notes.forEach(function (note, index) {
+            if (note.step % 4 === 0) strongNotes += 1;
+            const next = chordPhrase.notes[index + 1];
+            if (next && Math.floor(next.step / 16) === Math.floor(note.step / 16)) {
+              moves += 1;
+              if (Math.abs(next.degree - note.degree) > 4) leaps += 1;
+            }
+          });
+        });
+      }
+    });
+    assert(strongNotes > 500 && leaps / moves < 0.08, 'Lines move mostly by steps and small skips within a bar: ' + (leaps / moves).toFixed(3));
+    const lowLine = synth.phrase({ seed: 'SHARED', octave: 2, progression: 'vi-IV-V-I', bars: 8 });
+    const highLine = synth.phrase({ seed: 'OTHER', octave: 4, progression: 'vi-IV-V-I', bars: 8 });
+    assert(JSON.stringify(lowLine.chords) === JSON.stringify(highLine.chords) && [lowLine, highLine].every(function (line) {
+      return line.notes.filter(function (note) { return note.step % 16 === 0; }).every(function (note) { return triad(note.degree, line.chords[note.step / 16]); });
+    }), 'Bass and upper FM phrases on the same progression share each bar\'s chord');
+    const defaultLine = synth.phrase(options);
+    assert(defaultLine.notes.filter(function (note) { return note.step % 4 === 0; }).every(function (note) { return triad(note.degree, 0); }), 'One-chord phrases put tonic chord tones on every beat');
 
     const signatures = new Set();
     for (let seed = 0; seed < 24; seed++) {
@@ -140,10 +176,13 @@
     assert(statistics(short.buffer).rms < statistics(pure.buffer).rms * 0.5, 'Short decay reduces sustained note energy');
     assert(!equalPCM(bright.buffer, synth.synthesize(context, Object.assign({}, pureOptions, { index: 3, ratio: 1 })).buffer), 'Changing the modulator ratio changes the synthesized timbre');
 
-    const highOptions = { seed: 2, bars: 2, octave: 5, tonic: 11, density: 100, ratio: 4, index: 8 };
+    let highSeed = 0;
+    while (highSeed < 64 && !synth.phrase({ seed: highSeed, bars: 2, octave: 5, tonic: 11, density: 100 }).notes.some(function (note) { return note.midi >= 95; })) highSeed += 1;
+    const highOptions = { seed: highSeed, bars: 2, octave: 5, tonic: 11, density: 100, ratio: 4, index: 8 };
     const highFM = synth.synthesize(context, highOptions);
     const highSine = synth.synthesize(context, Object.assign({}, highOptions, { index: 0 }));
-    const highest = highFM.phrase.notes.find(function (note) { return note.midi === 95; });
+    const highest = highFM.phrase.notes.reduce(function (top, note) { return !top || note.midi > top.midi ? note : top; }, null);
+    assert(highest && highest.midi >= 95, 'A seed reaches the top of the register for the aliasing check');
     assert(highest && highFM.buffer.getChannelData(0).slice(Math.round(highest.start * 44100), Math.round((highest.start + highest.duration) * 44100)).every(function (sample, frame) {
       return sample === highSine.buffer.getChannelData(0)[Math.round(highest.start * 44100) + frame];
     }) && !equalPCM(highFM.buffer, highSine.buffer), 'FM depth rolls down to a sine where high-note sidebands would alias, while lower notes retain FM');
