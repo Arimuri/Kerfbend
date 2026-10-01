@@ -787,10 +787,10 @@
     if (error) { $('fm-status').textContent = error; updateFMControls(); return; }
     const { buffer, phrase } = fmDraft;
     const options = phrase.settings;
-    const name = `FM SINE ${harmony.notes[options.tonic]} major · ${options.seed}`;
+    const name = `${options.index ? 'FM' : 'SINE'} ${harmony.notes[options.tonic]} major · ${options.seed}`;
     remember();
     state.lanes.push({
-      id: `fm-${++fmNumber}`, name, kind: 'fm', category: 'other', buffer,
+      id: `fm-${++fmNumber}`, name, kind: 'fm', category: 'other', buffer, releaseSeconds: 0.03,
       synthSettings: { ...options }, color: colors[state.lanes.length % colors.length], volume: .7,
       muted: false, solo: false, locked: false, events: [], pitchEnvChance: 100,
       detectedKey: harmony.fromValue(`${options.tonic}:major`, 'synth'), keyOverride: 'auto', keyShift: 0,

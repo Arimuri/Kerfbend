@@ -19,7 +19,7 @@
       tonic: Math.round(bounded(input.tonic, 0, 0, 11)),
       octave: Math.round(bounded(input.octave, 2, 1, 5)),
       density: bounded(input.density, 60, 0, 100),
-      index: bounded(input.index, 2, 0, 8),
+      index: bounded(input.index, 0, 0, 8),
       ratio: Math.round(bounded(input.ratio, 2, 1, 4)),
       decay: bounded(input.decay, 300, 40, 1200),
       seed: String(input.seed == null ? 'FM-001' : input.seed).trim().slice(0, 256) || 'FM-001'

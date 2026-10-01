@@ -395,9 +395,11 @@
         }
         var gain = offline.createGain();
         var fade = Math.min(0.006, item.duration / 3);
+        // Pure tones (FM sources) close over a few cycles so cut notes do not click.
+        var release = Math.min(clamp(number(item.lane.releaseSeconds, 0.006), 0.006, 0.05), item.duration / 3);
         gain.gain.setValueAtTime(0, item.start);
         gain.gain.linearRampToValueAtTime(item.gain, item.start + fade);
-        gain.gain.setValueAtTime(item.gain, item.start + item.duration - fade);
+        gain.gain.setValueAtTime(item.gain, item.start + item.duration - release);
         gain.gain.linearRampToValueAtTime(0, item.start + item.duration);
         source.connect(gain);
         // Two-input sums fix floating-point accumulation order across renders.

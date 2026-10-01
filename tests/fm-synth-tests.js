@@ -15,7 +15,7 @@
     const Constructor = root.OfflineAudioContext || root.webkitOfflineAudioContext;
     const context = new Constructor(1, 1, 44100);
     const defaults = synth.normalize();
-    assert(defaults.bpm === 120 && defaults.bars === 4 && defaults.tonic === 0 && defaults.octave === 2 && defaults.density === 60 && defaults.index === 2 && defaults.ratio === 2 && defaults.decay === 300 && defaults.seed === 'FM-001', 'Default settings specify a C2 FM phrase');
+    assert(defaults.bpm === 120 && defaults.bars === 4 && defaults.tonic === 0 && defaults.octave === 2 && defaults.density === 60 && defaults.index === 0 && defaults.ratio === 2 && defaults.decay === 300 && defaults.seed === 'FM-001', 'Default settings specify a pure C2 sine phrase');
     const invalid = synth.normalize({ bpm: NaN, bars: Infinity, tonic: NaN, octave: NaN, density: NaN, index: Infinity, ratio: NaN, decay: NaN, seed: ' ' });
     assert(JSON.stringify(invalid) === JSON.stringify(defaults), 'Nonfinite controls and empty seed recover sensible defaults');
     const low = synth.normalize({ bpm: -4, bars: -1, tonic: -5, octave: 0, density: -1, index: -10, ratio: -1, decay: -4 });
@@ -124,6 +124,9 @@
     }
     const TAU = Math.PI * 2;
     assert(powerAt(pure.buffer, 660) / powerAt(pure.buffer, 220) < 1e-6, 'FM index zero produces a sine without an added third harmonic');
+    const plain = Object.assign({}, pureOptions);
+    delete plain.index;
+    assert(equalPCM(pure.buffer, synth.synthesize(context, plain).buffer), 'Without an FM amount the default renders the same pure sine');
     assert(powerAt(bright.buffer, 660) > powerAt(pure.buffer, 220) * 0.01, 'FM adds audible harmonic energy to the sine carrier');
     assert(equalPCM(pure.buffer, synth.synthesize(context, Object.assign({}, pureOptions, { ratio: 4 })).buffer), 'Ratio has no effect while FM depth is zero');
     const short = synth.synthesize(context, Object.assign({}, pureOptions, { decay: 40 }));

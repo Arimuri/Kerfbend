@@ -344,6 +344,24 @@
       assert(JSON.stringify(fixture.event) === beforeEvent, 'Envelope changed source event metadata');
       assert(fixture.lane.buffer.getChannelData(0).every(function (sample, index) { return sample === beforePCM[index]; }), 'Envelope changed the original source PCM');
     });
+    await test('Pure-tone lanes release cut notes over their release time', async function () {
+      var buffer = engine.context.createBuffer(1, 44100, 44100);
+      buffer.getChannelData(0).fill(0.5);
+      var settings = { bpm: 120, bars: 1, chop: 1 };
+      var event = { laneId: 'tone', step: 0, sliceIndex: 0, durationSteps: 2, velocity: 1 };
+      var plain = await engine.render([{ id: 'tone', buffer: buffer, volume: 1 }], settings, [event]);
+      var soft = await engine.render([{ id: 'tone', buffer: buffer, volume: 1, releaseSeconds: 0.03 }], settings, [event]);
+      var capped = await engine.render([{ id: 'tone', buffer: buffer, volume: 1, releaseSeconds: 4 }], settings, [event]);
+      var end = Math.round(0.25 * 44100);
+      function before(output, seconds) { return output.getChannelData(0)[end - Math.round(seconds * 44100)]; }
+      assert(Math.abs(before(plain, 0.015) - 0.4) < 1e-3 && Math.abs(before(soft, 0.015) - 0.2) < 0.005, 'A 30 ms release did not halve the level 15 ms before the cut');
+      assert(Math.abs(before(soft, 0.024) - 0.4 * 0.8) < 0.005 && before(soft, 0.001) < 0.02, 'The release did not ramp linearly to silence at the cut');
+      assert(Math.abs(before(capped, 0.025) - 0.2) < 0.005, 'Release times longer than 50 ms were not capped');
+      var untouched = Math.round((0.25 - 0.06) * 44100);
+      var a = plain.getChannelData(0);
+      var b = soft.getChannelData(0);
+      for (var frame = 0; frame < untouched; frame++) assert(a[frame] === b[frame], 'A release changed the attack or sustain');
+    });
     await test('Per-part envelope chance switches a lane without touching other lanes', async function () {
       var fixture = envelopeFixture(1);
       var plain = Object.assign({}, fixture.settings, { pitchEnvDepth: 0 });
