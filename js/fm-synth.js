@@ -162,11 +162,12 @@
   function noteSegments(result) {
     const duration = Number(result && result.duration);
     const notes = result && Array.isArray(result.notes) ? result.notes : [];
-    if (!(duration > 0)) return { segments: [], segmentsDuration: 0, chords: [] };
+    if (!(duration > 0)) return { segments: [], segmentsDuration: 0, segmentsSteps: 0, chords: [] };
     return {
       segmentsDuration: duration,
+      segmentsSteps: result.settings && result.settings.bars ? result.settings.bars * 16 : Math.round(duration / (notes[0] && notes[0].steps ? notes[0].duration / notes[0].steps : 1)),
       segments: notes.map(function (note) {
-        return { start: note.start, end: note.start + note.duration, step: note.step, midi: note.midi, degree: note.degree, chord: note.chord };
+        return { start: note.start, end: note.start + note.duration, step: note.step, steps: note.steps, midi: note.midi, degree: note.degree, chord: note.chord };
       }),
       chords: Array.isArray(result.chords) ? result.chords.slice() : []
     };

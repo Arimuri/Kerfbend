@@ -130,16 +130,18 @@
       [2, 4, 8].forEach(function (bars) {
         const events = generator.generate([noteLane], Object.assign({}, settings, { size, bars, density: 100, breaks: 0 }), 'NOTE-RUNS');
         assert(events.length >= bars && noteRuns(events), 'Note cuts start and end on note boundaries at size ' + size + ' / ' + bars + ' bars');
-        assert(events.every(function (event) {
-          return event.segmentCount <= values[2] && (event.segmentCount >= values[1] || event.sliceIndex + event.segmentCount === noteLane.segments.length);
-        }), 'Size ' + size + ' keeps runs of ' + values[1] + '–' + values[2] + ' notes');
+        const full = events.filter(function (event) { return event.segmentCount >= values[1] || event.sliceIndex + event.segmentCount === noteLane.segments.length; });
+        assert(events.every(function (event) { return event.segmentCount <= values[2]; }) && full.length / events.length >= 0.6,
+          'Size ' + size + ' keeps runs of up to ' + values[2] + ' notes, mostly at least ' + values[1] + ': ' + full.length + '/' + events.length);
         assert(events.every(function (event, index) {
           return event.step + event.durationSteps <= (index + 1 < events.length ? events[index + 1].step : bars * 16);
         }), 'Note runs never overlap within the lane at size ' + size + ' / ' + bars + ' bars');
-        const whole = events.filter(function (event) {
-          return event.durationSteps === Math.max(1, Math.round(event.lengthRatio * noteLane.segmentsDuration / sixteenth));
-        });
-        assert(whole.length / events.length > 0.7, 'Most runs play every note to its end at size ' + size + ' / ' + bars + ' bars');
+        assert(events.every(function (event, index) {
+          const natural = Math.max(1, Math.round(event.lengthRatio * noteLane.segmentsDuration / sixteenth));
+          const end = event.step + event.durationSteps;
+          const next = index + 1 < events.length ? events[index + 1].step : bars * 16;
+          return event.durationSteps <= natural && (event.durationSteps === natural || end === next || end === bars * 16 || end % 16 === 12);
+        }), 'Runs play to their end unless the next onset, the answer bar ending or the loop end cuts them at size ' + size + ' / ' + bars + ' bars');
       });
     });
     const noteSettings = Object.assign({}, settings, { bars: 8, density: 100, breaks: 0 });
@@ -359,6 +361,39 @@
         }
       });
       assert(followed > 1000, 'Enough cuts were checked against the chords: ' + followed);
+      let multi = 0;
+      let aligned = 0;
+      let repeats = 0;
+      let cuts = 0;
+      for (let index = 0; index < 20; index += 1) {
+        const runLane = fmLane('fm-runs', 4, 'I', 'RUNS-' + index);
+        [0, 50, 75, 100].forEach(function (size) {
+          const runSettings = Object.assign({}, settings, { size, density: 90, breaks: 0 });
+          const events = generator.generate([runLane], runSettings, 'RUN-' + index);
+          const label = 'size ' + size + ' / RUN-' + index;
+          assert(JSON.stringify(events) === JSON.stringify(generator.generate([runLane], Object.assign({}, runSettings, { bpm: 77, swing: 40, pitchEnvDepth: 12, pitchEnvChance: 30, maxVoices: 1, keySync: false, targetKey: '5:major' }), 'RUN-' + index)),
+            'Tempo, swing, envelope, voice and key settings never change the arrangement: ' + label);
+          events.forEach(function (event, position) {
+            const notes = runLane.segments.slice(event.sliceIndex, event.sliceIndex + event.segmentCount);
+            assert(notes.every(function (note, offset) {
+              return !offset || note.step - (notes[offset - 1].step + notes[offset - 1].steps) <= 1;
+            }) && notes[notes.length - 1].step + notes[notes.length - 1].steps - notes[0].step <= 8 &&
+              event.durationSteps <= notes[notes.length - 1].step + notes[notes.length - 1].steps - notes[0].step, 'Runs join only closely following notes within half a bar: ' + label);
+            if (event.segmentCount > 1) {
+              multi += 1;
+              if ((event.step - notes[0].step) % 2 === 0) aligned += 1;
+            }
+            const previous = events[position - 1];
+            if (previous && previous.sliceIndex === event.sliceIndex && Math.floor(previous.step / 16) === Math.floor(event.step / 16)) repeats += 1;
+            cuts += 1;
+          });
+        });
+        const at75 = generator.generate([runLane], Object.assign({}, settings, { size: 75, density: 90 }), 'RUN-' + index);
+        const at100 = generator.generate([runLane], Object.assign({}, settings, { size: 100, density: 90 }), 'RUN-' + index);
+        assert(index > 2 || JSON.stringify(at75) !== JSON.stringify(at100) || runLane.segments.length < 4, 'The top of SIZE still changes FM runs');
+      }
+      assert(multi > 100 && aligned / multi > 0.97, 'Runs of several notes keep their eighth-note grid: ' + aligned + '/' + multi);
+      assert(repeats / cuts > 0.05 && repeats / cuts < 0.4, 'Runs sometimes repeat back to back like a chop stutter: ' + (repeats / cuts).toFixed(3));
       const lead = fmLane('fm-lead', 4, 'I-IV', 'LEAD-X');
       const plain = Object.assign({}, lead);
       delete plain.chords;

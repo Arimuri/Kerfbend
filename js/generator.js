@@ -139,24 +139,38 @@
       return note && Number.isFinite(note.start) && Number.isFinite(note.end) &&
         note.start >= 0 && note.end > note.start && note.end <= duration + 1e-9;
     }).sort(function (first, second) { return first.start - second.start; });
-    return notes.length ? { duration, notes } : null;
+    // Generated phrases record their sixteenth grid, so cut lengths are
+    // counted in the phrase's own steps and never change with the loop tempo.
+    const steps = Number(lane.segmentsSteps);
+    return notes.length ? { duration, notes, grid: Number.isInteger(steps) && steps > 0 ? duration / steps : null } : null;
   }
 
   // SIZE picks how many neighbouring notes stay together in one cut.
   function noteGroup(size) {
     if (size < 25) return [1, 1];
-    if (size < 75) return [1, 2];
+    if (size < 60) return [1, 2];
+    if (size < 85) return [2, 2];
     return [2, 3];
   }
 
   function noteCut(plan, first, count, stepSeconds) {
-    const last = Math.min(plan.notes.length - 1, first + count - 1);
+    const unit = plan.grid || stepSeconds;
+    const at = function (note) { return Number.isInteger(note.step) ? note.step : Math.round(note.start / unit); };
+    const span = function (note) { return Number.isInteger(note.steps) ? note.steps : Math.max(1, Math.round((note.end - note.start) / unit)); };
+    let last = first;
+    // A run only takes notes that follow on within a sixteenth and keeps
+    // within half a bar, so it never carries long silences.
+    while (last + 1 < plan.notes.length && last - first + 1 < count) {
+      const next = plan.notes[last + 1];
+      if (at(next) - (at(plan.notes[last]) + span(plan.notes[last])) > 1 || at(next) + span(next) - at(plan.notes[first]) > 8) break;
+      last += 1;
+    }
     const start = plan.notes[first].start;
     const length = plan.notes[last].end - start;
     return {
       sliceIndex: first, segmentCount: last - first + 1,
       startRatio: start / plan.duration, lengthRatio: length / plan.duration,
-      sourceChop: plan.notes.length, durationSteps: Math.max(1, Math.round(length / stepSeconds)),
+      sourceChop: plan.notes.length, durationSteps: Math.max(1, at(plan.notes[last]) + span(plan.notes[last]) - at(plan.notes[first])),
     };
   }
 
@@ -251,15 +265,28 @@
       const jump = random();
       const pick = random();
       const size = random();
+      const again = random();
       const semitones = shift(octave(random, context.octave), context.style.rise);
       const reverse = random() < context.motion * 0.19 * context.style.reverse;
       const velocity = Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3));
       // A run keeps sounding until its last note ends.
       if (position < state.busyUntil) return;
-      const start = !state.previous || jump < context.style.jump
-        ? noteAt(plan, position, pick, state.previous ? null : avoidBar)
-        : (state.previous.sliceIndex + state.previous.segmentCount) % plan.notes.length;
-      const cut = noteCut(plan, start, context.group[0] + Math.floor(size * (context.group[1] - context.group[0] + 1)), context.stepSeconds);
+      let count = context.group[0] + Math.floor(size * (context.group[1] - context.group[0] + 1));
+      let start;
+      if (!state.previous || jump < context.style.jump) start = noteAt(plan, position, pick, state.previous ? null : avoidBar);
+      else if (again < context.style.stay) {
+        // Repeat the last run, the chop stutter of equal slices; off the
+        // run's eighth-note grid only its first note repeats.
+        start = state.previous.sliceIndex;
+        const step = plan.notes[start].step;
+        count = Number.isInteger(step) && Math.abs(position - step) % 2 ? 1 : state.previous.segmentCount;
+      } else {
+        start = (state.previous.sliceIndex + state.previous.segmentCount) % plan.notes.length;
+        // A continued run of several notes keeps them on the source's eighth-note grid.
+        const step = plan.notes[start].step;
+        if (count > 1 && Number.isInteger(step) && Math.abs(position - step) % 2) start = noteAt(plan, position, pick, null);
+      }
+      const cut = noteCut(plan, start, count, context.stepSeconds);
       const event = Object.assign({ laneId: context.lane.id, step: position }, cut, { semitones, reverse, velocity });
       if (!first) first = event;
       if (!(keep || position === force)) return;
