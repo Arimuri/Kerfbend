@@ -439,10 +439,14 @@
       // Prefer notes written over the target chord (so whole runs fit), then
       // the same chord position, then the nearest place in the source. Roots
       // for the bass and landings come first wherever they were written.
+      // The phrase already replays its two-bar rhythm and contour over each
+      // chord, so the note at the same spot of another cycle is the run's own
+      // transposed repeat; take it first when it sits over the target chord.
       const rank = function (entry) {
         const away = Math.abs(chordStep(entry.note, target) - wanted);
         const fit = [entry.note.chord === target ? 0 : 1, Math.min(away, 7 - away)];
-        return (rooted ? fit.reverse() : fit).concat([Math.abs(entry.index - event.sliceIndex), entry.index]);
+        const repeat = !rooted && entry.note.chord === target && Number.isInteger(current.step) && entry.note.step % 32 === current.step % 32 ? 0 : 1;
+        return [repeat].concat(rooted ? fit.reverse() : fit, [Math.abs(entry.index - event.sliceIndex), entry.index]);
       };
       const notes = plan.notes.map(function (note, index) { return { note, index, key: null }; }).filter(function (entry) {
         return entry.note.chord === target || chordStep(entry.note, target) === wanted;

@@ -51,8 +51,13 @@
     assert(faster.notes.every(function (note, index) {
       return note.midi === phrase.notes[index].midi && near(note.start * 200, phrase.notes[index].start * 137) && near(note.duration * 200, phrase.notes[index].duration * 137);
     }), 'Tempo changes preserve melody and rhythm while scaling note timing');
-    const transposed = synth.phrase(Object.assign({}, options, { tonic: 2, octave: 3 }));
-    assert(transposed.notes.every(function (note, index) { return note.midi === phrase.notes[index].midi + 5 && note.start === phrase.notes[index].start; }), 'Key and register controls transpose the whole major phrase');
+    const transposed = synth.phrase(Object.assign({}, options, { tonic: 2, octave: 1 }));
+    assert(transposed.notes.every(function (note, index) { return note.midi === phrase.notes[index].midi - 19 && note.start === phrase.notes[index].start; }), 'Key and register controls transpose the whole phrase within the bass register');
+    const middle = synth.phrase(Object.assign({}, options, { octave: 4 }));
+    const upper = synth.phrase(Object.assign({}, options, { octave: 5 }));
+    assert(upper.notes.every(function (note, index) { return note.midi === middle.notes[index].midi + 12 && note.start === middle.notes[index].start; }) &&
+      middle.notes.every(function (note, index) { return note.start === phrase.notes[index].start && note.steps === phrase.notes[index].steps && note.velocity === phrase.notes[index].velocity; }),
+    'Upper registers transpose together and every register keeps the rhythm');
     const cutPoints = synth.noteSegments(phrase);
     assert(cutPoints.segmentsDuration === phrase.duration && cutPoints.segments.length === phrase.notes.length && cutPoints.segments.every(function (segment, index) {
       const note = phrase.notes[index];
@@ -64,6 +69,11 @@
       Object.keys(synth.progressions).join(',') === 'I,I-IV,I-V,vi-IV,IV-V-iii-vi,vi-IV-V-I', 'Progressions default to one chord and accept the listed presets');
     const triad = function (degree, root) { return [0, 2, 4].includes((((degree - root) % 7) + 7) % 7); };
     let strongNotes = 0;
+    let highDownbeats = 0;
+    let highRoots = 0;
+    let strongHigh = 0;
+    let sevenths = 0;
+    const seventh = function (degree, root) { return (((degree - root) % 7) + 7) % 7 === 6; };
     let leaps = 0;
     let moves = 0;
     Object.keys(synth.progressions).forEach(function (name) {
@@ -74,9 +84,25 @@
           assert(JSON.stringify(chordPhrase.chords) === JSON.stringify(Array.from({ length: bars }, function (_, bar) { return roots[bar % roots.length]; })) &&
             chordPhrase.notes.every(function (note) { return note.chord === chordPhrase.chords[Math.floor(note.step / 16)]; }), 'Each bar carries its chord: ' + name + ' / ' + seed);
           assert(chordPhrase.notes.every(function (note) {
-            return note.degree >= 0 && note.degree <= 9 && note.midi === 45 + synth.semitonesOf(note.degree) && (note.step % 4 || triad(note.degree, note.chord));
-          }), 'Notes on the beat are chord tones and every note stays in the major scale: ' + name + ' / ' + seed);
+            return note.degree >= 0 && note.degree <= 9 && note.midi === 45 + synth.semitonesOf(note.degree) && (note.step % 4 || triad(note.degree, note.chord) || seventh(note.degree, note.chord)) &&
+              (note.step % 16 || triad(note.degree, note.chord));
+          }), 'Beats take chord tones or the diatonic seventh, downbeats only chord tones, and every note stays in the major scale: ' + name + ' / ' + seed);
           assert(chordPhrase.notes[0].step === 0 && chordPhrase.notes[0].degree === roots[0], 'The phrase opens on the first chord root: ' + name + ' / ' + seed);
+          assert(chordPhrase.notes.filter(function (note) { return note.step % 16 === 0; }).every(function (note) { return (((note.degree - note.chord) % 7) + 7) % 7 === 0; }),
+            'A bass-register phrase plays the root on every downbeat: ' + name + ' / ' + seed);
+          const rhythm = function (line) { return JSON.stringify(line.notes.map(function (note) { return [note.step, note.steps, note.velocity]; })); };
+          assert(rhythm(chordPhrase) === rhythm(synth.phrase({ seed: 'CHORD-' + seed, bars, density: 75, progression: 'I', tonic: 9, octave: 2 })), 'Changing the progression never changes the rhythm or dynamics: ' + name + ' / ' + seed);
+          const high = synth.phrase({ seed: 'CHORD-' + seed, bars, density: 75, progression: name, tonic: 9, octave: 4 });
+          high.notes.forEach(function (note) {
+            if (note.step % 16 === 0 && note.step) {
+              highDownbeats += 1;
+              if ((((note.degree - note.chord) % 7) + 7) % 7 === 0) highRoots += 1;
+            }
+            if (note.step % 4 === 0) {
+              strongHigh += 1;
+              if (seventh(note.degree, note.chord)) sevenths += 1;
+            }
+          });
           chordPhrase.notes.forEach(function (note, index) {
             if (note.step % 4 === 0) strongNotes += 1;
             const next = chordPhrase.notes[index + 1];
@@ -89,13 +115,15 @@
       }
     });
     assert(strongNotes > 500 && leaps / moves < 0.08, 'Lines move mostly by steps and small skips within a bar: ' + (leaps / moves).toFixed(3));
+    assert(highRoots / highDownbeats > 0.08 && highRoots / highDownbeats < 0.4, 'Higher phrases mostly land on the third or fifth, so they do not double the bass root: ' + (highRoots / highDownbeats).toFixed(3));
+    assert(sevenths / strongHigh > 0.04 && sevenths / strongHigh < 0.25, 'Some beats take the chord seventh for colour: ' + (sevenths / strongHigh).toFixed(3));
     const lowLine = synth.phrase({ seed: 'SHARED', octave: 2, progression: 'vi-IV-V-I', bars: 8 });
     const highLine = synth.phrase({ seed: 'OTHER', octave: 4, progression: 'vi-IV-V-I', bars: 8 });
     assert(JSON.stringify(lowLine.chords) === JSON.stringify(highLine.chords) && [lowLine, highLine].every(function (line) {
       return line.notes.filter(function (note) { return note.step % 16 === 0; }).every(function (note) { return triad(note.degree, line.chords[note.step / 16]); });
     }), 'Bass and upper FM phrases on the same progression share each bar\'s chord');
     const defaultLine = synth.phrase(options);
-    assert(defaultLine.notes.filter(function (note) { return note.step % 4 === 0; }).every(function (note) { return triad(note.degree, 0); }), 'One-chord phrases put tonic chord tones on every beat');
+    assert(defaultLine.notes.filter(function (note) { return note.step % 4 === 0; }).every(function (note) { return triad(note.degree, 0) || seventh(note.degree, 0); }), 'One-chord phrases put tonic chord tones (or its seventh) on every beat');
 
     const signatures = new Set();
     for (let seed = 0; seed < 24; seed++) {

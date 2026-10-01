@@ -46,8 +46,17 @@
     return [0, 2, 4].includes((((degree - root) % 7) + 7) % 7);
   }
 
-  // Strong beats move to the nearest chord tone in the drawn direction.
+  // Strong beats move to the nearest chord tone in the drawn direction; one
+  // in six may take the chord's diatonic seventh for a maj7 or m7 colour.
   function chordTone(degree, root, draw) {
+    if ((draw >= 0.42 && draw < 0.5) || draw >= 0.92) {
+      let colour = null;
+      for (let candidate = LOWEST; candidate <= HIGHEST; candidate++) {
+        if ((((candidate - root - 6) % 7) + 7) % 7) continue;
+        if (colour === null || Math.abs(candidate - degree) < Math.abs(colour - degree)) colour = candidate;
+      }
+      if (colour !== null) return colour;
+    }
     const tones = [];
     for (let candidate = LOWEST; candidate <= HIGHEST; candidate++) if (inChord(candidate, root)) tones.push(candidate);
     const above = tones.filter(function (tone) { return tone >= degree; });
@@ -56,9 +65,11 @@
     return below.length ? below[below.length - 1] : above[0];
   }
 
-  // Bar downbeats sound the root, fifth or third closest to the line.
-  function downbeat(degree, root, draw, first) {
-    const offset = first || draw < 0.55 ? 0 : draw < 0.8 ? 4 : 2;
+  // Bar downbeats sound a chord tone close to the line: a low phrase plays
+  // the root, a higher one mostly the third or fifth so it does not double
+  // the bass. The phrase opens on the root.
+  function downbeat(degree, root, draw, first, low) {
+    const offset = first || low ? 0 : draw < 0.45 ? 2 : draw < 0.8 ? 4 : 0;
     if (first) return root;
     let best = null;
     for (let candidate = LOWEST; candidate <= HIGHEST; candidate++) {
@@ -70,12 +81,12 @@
 
   // The two-bar contour is realised over each cycle's chords: strong beats
   // take chord tones and the steps between them pass or turn by scale steps.
-  function realize(draws, roots) {
+  function realize(draws, roots, low, opening) {
     const degrees = [];
     let degree = roots[0];
     draws.forEach(function (draw, step) {
       const root = roots[Math.floor(step / 16)];
-      if (step % 16 === 0) degree = downbeat(degree, root, draw.direction, step === 0);
+      if (step % 16 === 0) degree = downbeat(degree, root, draw.direction, opening && step === 0, low);
       else if (step % 4 === 0) degree = chordTone(degree, root, draw.direction);
       else {
         const move = draw.direction < 0.3 ? -1 : draw.direction < 0.45 ? 0 : draw.direction < 0.75 ? 1 : draw.direction < 0.88 ? -2 : 2;
@@ -128,7 +139,7 @@
     const candidates = [];
     for (let cycle = 0; cycle < settings.bars / 2; cycle++) {
       // Each cycle replays the rhythm and contour over its own two chords.
-      const degrees = realize(draws, [chords[cycle * 2], chords[cycle * 2 + 1]]);
+      const degrees = realize(draws, [chords[cycle * 2], chords[cycle * 2 + 1]], settings.octave <= 2, cycle === 0);
       motif.forEach(function (note) {
         const variation = random();
         let degree = degrees[note.step];
