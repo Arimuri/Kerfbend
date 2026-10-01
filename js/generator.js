@@ -2,7 +2,7 @@
   'use strict';
 
   const defaults = Object.freeze({
-    bpm: 120, bars: 4, density: 60, breaks: 15, size: 50, motion: 25, swing: 0, chop: 16,
+    bpm: 120, bars: 4, density: 60, breaks: 15, size: 50, motion: 25, octave: 12, swing: 0, chop: 16,
   });
   const rhythms = [
     [0, 2, 5, 6, 8, 10, 13, 14],
@@ -26,6 +26,7 @@
       breaks: bounded(input.breaks, defaults.breaks, 0, 100),
       size: bounded(input.size, defaults.size, 0, 100),
       motion: bounded(input.motion, defaults.motion, 0, 100),
+      octave: bounded(input.octave, defaults.octave, 0, 100),
       swing: bounded(input.swing, defaults.swing, 0, 50),
     };
   }
@@ -59,10 +60,10 @@
     };
   }
 
-  function octave(random, motion) {
+  function octave(random, probability) {
     const chance = random();
-    if (chance < motion * 0.12) return -12;
-    if (chance < motion * 0.48) return 12;
+    if (chance < probability * 0.25) return -12;
+    if (chance < probability) return 12;
     return 0;
   }
 
@@ -85,6 +86,7 @@
     const random = randomFor(seed, lane.id);
     const scatter = 0.45;
     const motion = settings.motion / 100;
+    const octaveProbability = settings.octave / 100;
     const density = settings.density / 100;
     const minimumLength = 1 + Math.floor(settings.size / 50);
     const maximumLength = 1 + Math.round(settings.size * 0.03);
@@ -111,7 +113,7 @@
           startRatio: slice / settings.chop,
           sourceChop: settings.chop,
           durationSteps: minimumLength + Math.floor(random() * (maximumLength - minimumLength + 1)),
-          semitones: octave(random, motion),
+          semitones: octave(random, octaveProbability),
           reverse: random() < motion * 0.19,
           velocity: Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3)),
         };
@@ -129,7 +131,7 @@
         if (answer && random() < scatter * 0.23) {
           event.sliceIndex = Math.floor(random() * settings.chop);
           event.startRatio = event.sliceIndex / settings.chop;
-          event.semitones = octave(random, motion);
+          event.semitones = octave(random, octaveProbability);
           event.reverse = random() < motion * 0.19;
         }
         events.push(event);

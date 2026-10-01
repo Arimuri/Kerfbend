@@ -147,7 +147,7 @@
   }
 
   function syncSettings() {
-    ['bpm', 'bars', 'density', 'breaks', 'size', 'motion', 'swing'].forEach((key) => {
+    ['bpm', 'bars', 'density', 'breaks', 'size', 'motion', 'octave', 'swing'].forEach((key) => {
       $(key).value = state.settings[key];
       const output = $(`${key}-output`);
       if (output) output.innerHTML = key === 'swing' ? `${state.settings[key]}%` : `${state.settings[key]}<span>%</span>`;
@@ -585,7 +585,7 @@
     } catch (error) { notify(error.message); }
   }
 
-  ['density', 'breaks', 'size', 'motion', 'swing'].forEach((key) => {
+  ['density', 'breaks', 'size', 'motion', 'octave', 'swing'].forEach((key) => {
     $(key).addEventListener('input', () => {
       rangeFill($(key));
       $(`${key}-output`).innerHTML = key === 'swing' ? `${$(key).value}%` : `${$(key).value}<span>%</span>`;
