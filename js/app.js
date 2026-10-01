@@ -11,6 +11,7 @@
   const colors = ['#a7d1ff', '#d6bfff', '#e7e68c', '#ffb99f', '#9dd8c8', '#efb8d3', '#b7c6f5', '#ddc5a1'];
   const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
   const envelopeChances = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
+  const roleLabels = { lead: '主役', bass: 'ベース', fill: '合いの手', drums: 'ドラム' };
   const history = [];
   const peaks = new WeakMap();
   let renderVersion = 0;
@@ -94,7 +95,7 @@
     $('max-voices').disabled = importing;
     $('max-drum-voices').disabled = importing;
     ['pitch-env-depth', 'pitch-env-time', 'pitch-env-depth-random', 'pitch-env-time-random'].forEach((id) => { $(id).disabled = importing; });
-    document.querySelectorAll('.source-key, .source-category, .pitch-envelope-lane select').forEach((select) => { select.disabled = importing; });
+    document.querySelectorAll('.source-key, .source-category, .source-role, .pitch-envelope-lane select').forEach((select) => { select.disabled = importing; });
     document.body.classList.toggle('busy', rendering || importing);
     document.body.classList.toggle('playing', playing);
     $('play-button').classList.toggle('is-playing', playing);
@@ -283,7 +284,7 @@
       row.dataset.laneId = lane.id;
       row.dataset.category = categories.get(lane);
       row.style.setProperty('--lane-color', lane.color);
-      row.innerHTML = '<i class="source-color"></i><div><span class="source-title"></span><span class="source-detail"></span></div><button class="source-preview" type="button">▶</button><button class="source-remove" type="button">×</button><label class="source-category-control">分類 <select class="source-category"><option value="other">その他</option><option value="drums">ドラム</option></select></label><div class="source-tuning"><select class="source-key"></select><span class="key-shift"></span></div><span class="source-major-note"></span>';
+      row.innerHTML = '<i class="source-color"></i><div><span class="source-title"></span><span class="source-detail"></span></div><button class="source-preview" type="button">▶</button><button class="source-remove" type="button">×</button><div class="source-controls"><label class="source-category-control">分類 <select class="source-category"><option value="other">その他</option><option value="drums">ドラム</option></select></label><label class="source-role-control">役割 <select class="source-role"></select></label></div><div class="source-tuning"><select class="source-key"></select><span class="key-shift"></span></div><span class="source-major-note"></span>';
       const filename = lane.filename || lane.name;
       row.querySelector('.source-title').textContent = filename;
       row.querySelector('.source-title').title = filename;
@@ -301,6 +302,29 @@
         if (categories.get(lane) === categorySelect.value) return;
         remember();
         lane.category = categorySelect.value;
+        updateView();
+        renderAudio();
+      });
+      const roleSelect = row.querySelector('.source-role');
+      const automatic = generator.roles(state.lanes.map((other) => (other === lane ? { ...other, role: 'auto' } : other)))[lane.id];
+      [['auto', `自動：${roleLabels[automatic]}`], ...generator.roleNames.map((role) => [role, roleLabels[role]])].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        roleSelect.append(option);
+      });
+      roleSelect.value = generator.roleNames.includes(lane.role) ? lane.role : 'auto';
+      roleSelect.disabled = importing;
+      roleSelect.setAttribute('aria-label', `${lane.name} の役割`);
+      roleSelect.title = '主役：フレーズの中心 / ベース：低音とリズムを支える / 合いの手：主役の休みに返事をする';
+      roleSelect.addEventListener('change', () => {
+        if (importing) return;
+        const value = generator.roleNames.includes(roleSelect.value) ? roleSelect.value : 'auto';
+        if (value === (generator.roleNames.includes(lane.role) ? lane.role : 'auto')) return;
+        remember();
+        lane.role = value;
+        // Roles shape the composition, so unlocked lanes are rebuilt with the same SEED.
+        regenerateEvents();
         updateView();
         renderAudio();
       });
@@ -374,6 +398,7 @@
     list.replaceChildren();
     const anySolo = state.lanes.some((lane) => lane.solo);
     const audible = playbackEvents();
+    const parts = generator.roles(state.lanes);
     const ordered = categories.groups.flatMap((category) => state.lanes.filter((lane) => categories.get(lane) === category.id));
     let previousCategory;
     ordered.forEach((lane, index) => {
@@ -391,10 +416,12 @@
       row.classList.toggle('is-muted', lane.muted || (anySolo && !lane.solo));
       row.dataset.laneId = lane.id;
       row.dataset.category = category;
-      row.innerHTML = '<div class="lane-info"><div class="lane-title"><span class="lane-number"></span><span class="lane-name"></span></div><div class="lane-buttons"><button class="lane-button lock-button" type="button">LOCK</button><button class="lane-button mute-button" type="button">M</button><button class="lane-button solo-button" type="button">S</button><input class="lane-volume" type="range" min="0" max="100"></div></div><div class="lane-track"><canvas></canvas><div class="playhead"></div></div>';
+      row.innerHTML = '<div class="lane-info"><div class="lane-title"><span class="lane-number"></span><span class="lane-name"></span><span class="lane-role"></span></div><div class="lane-buttons"><button class="lane-button lock-button" type="button">LOCK</button><button class="lane-button mute-button" type="button">M</button><button class="lane-button solo-button" type="button">S</button><input class="lane-volume" type="range" min="0" max="100"></div></div><div class="lane-track"><canvas></canvas><div class="playhead"></div></div>';
       row.querySelector('.lane-number').textContent = String(index + 1).padStart(2, '0');
       row.querySelector('.lane-name').textContent = lane.name;
-      row.querySelector('.lane-title').title = lane.name;
+      row.querySelector('.lane-role').textContent = roleLabels[parts[lane.id]] || '';
+      row.querySelector('.lane-role').dataset.role = parts[lane.id] || '';
+      row.querySelector('.lane-title').title = `${lane.name}（${roleLabels[parts[lane.id]] || ''}）`;
       const canvas = row.querySelector('canvas');
       const count = audible.filter((event) => event.laneId === lane.id).length;
       canvas.setAttribute('aria-label', `${lane.name}: ${count}個の発音 / ${lane.events.length}個の断片`);

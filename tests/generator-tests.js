@@ -145,7 +145,8 @@
     const noteSettings = Object.assign({}, settings, { bars: 8, density: 100, breaks: 0 });
     const notePair = generator.generate([noteLane, lanes[0]], noteSettings, 'NOTE-MACROS');
     assert(JSON.stringify(notePair) === JSON.stringify(generator.generate([noteLane, lanes[0]], noteSettings, 'NOTE-MACROS')), 'Note cuts are deterministic');
-    assert(JSON.stringify(notePair.filter(function (event) { return event.laneId === 'voice'; })) === JSON.stringify(generator.generate([lanes[0]], noteSettings, 'NOTE-MACROS')), 'A note-cut lane does not change other lanes');
+    const answeringNotes = generator.generate([Object.assign({ role: 'fill' }, noteLane), lanes[0]], noteSettings, 'NOTE-MACROS');
+    assert(JSON.stringify(answeringNotes.filter(function (event) { return event.laneId === 'voice'; })) === JSON.stringify(generator.generate([lanes[0]], noteSettings, 'NOTE-MACROS')), 'An answering note-cut lane does not change the lead');
     [0, 100].forEach(function (octave) {
       assert(omit(generator.generate([noteLane], Object.assign({}, noteSettings, { octave }), 'NOTE-MACROS'), 'semitones') === omit(notePair.filter(function (event) { return event.laneId === 'fm-notes'; }), 'semitones'), 'Octave ' + octave + ' changes only pitch in note cuts');
     });
@@ -199,6 +200,52 @@
     }
     assert(newEndings === forms, 'The answer bar always changes the ending of A');
     assert(contrasts / forms > 0.95, 'The B bar contrasts with A: ' + contrasts + '/' + forms);
+    const band = [
+      { id: 'vox', kind: 'voice', name: 'GLASS VOICE' }, { id: 'pad', kind: 'keys', name: 'SOFT KEYS' },
+      { id: 'low', kind: 'bass', name: 'ROUND BASS' }, { id: 'kit', kind: 'drums', category: 'drums', name: 'DUST DRUMS' }
+    ];
+    const auto = generator.roles(band);
+    assert(auto.vox === 'lead' && auto.pad === 'fill' && auto.low === 'bass' && auto.kit === 'drums', 'Automatic roles find the lead, bass, answering part and drums');
+    const named = generator.roles([
+      { id: 'a', name: 'Pad Swell' }, { id: 'b', filename: '808_sub_C1.wav' }, { id: 'c', filename: 'VocalChop_F#min.wav' },
+      { id: 'd', kind: 'fm', synthSettings: { octave: 4 } }, { id: 'e', kind: 'fm', synthSettings: { octave: 2 } }
+    ]);
+    assert(named.a === 'fill' && named.b === 'bass' && named.c === 'lead' && named.d === 'fill' && named.e === 'fill', 'Names pick one bass and one lead; other parts answer: ' + JSON.stringify(named));
+    assert(generator.roles([{ id: 'x' }, { id: 'y' }]).x === 'lead' && generator.roles([{ id: 'x' }, { id: 'y' }]).y === 'fill', 'Without hints the first part leads');
+    const manual = generator.roles([Object.assign({}, band[0], { role: 'fill' }), Object.assign({}, band[1], { role: 'lead' }), band[2], Object.assign({}, band[3], { role: 'bass' })]);
+    assert(manual.vox === 'fill' && manual.pad === 'lead' && manual.low === 'fill' && manual.kit === 'bass', 'Manual roles override names, categories and the automatic picks: ' + JSON.stringify(manual));
+    assert(JSON.stringify(generator.roles(band.map(function (lane) { return Object.assign({ muted: true, solo: true, volume: 0, locked: true }, lane); }))) === JSON.stringify(auto), 'Mixer state and locks never change roles');
+    assert(generator.roles([Object.assign({ role: 'drums' }, band[0])]).vox === 'lead', 'Unknown manual roles fall back to automatic roles');
+
+    const bandSettings = Object.assign({}, settings, { breaks: 0, density: 80, octave: 100 });
+    let inside = 0;
+    let insideSteps = 0;
+    let outside = 0;
+    let outsideSteps = 0;
+    for (let index = 0; index < 24; index += 1) {
+      const seed = 'BAND-' + index;
+      const events = generator.generate(band, bandSettings, seed);
+      const lead = events.filter(function (event) { return event.laneId === 'vox'; });
+      const fill = events.filter(function (event) { return event.laneId === 'pad'; });
+      const bass = events.filter(function (event) { return event.laneId === 'low'; });
+      const sounding = new Uint8Array(64);
+      lead.forEach(function (event) { for (let step = event.step; step < event.step + event.durationSteps; step += 1) sounding[step] = 1; });
+      sounding.forEach(function (on) { if (on) insideSteps += 1; else outsideSteps += 1; });
+      fill.forEach(function (event) { if (sounding[event.step]) inside += 1; else outside += 1; });
+      assert(JSON.stringify(lead) === JSON.stringify(generator.generate([band[0]], bandSettings, seed)) &&
+        JSON.stringify(lead) === JSON.stringify(generator.generate([band[0], band[2]], bandSettings, seed).filter(function (event) { return event.laneId === 'vox'; })),
+      'Adding or removing other parts never changes the lead: ' + seed);
+      assert(bass.length > 0 && bass.every(function (event) { return event.semitones <= 0; }), 'The bass never jumps an octave up: ' + seed);
+      const bassCells = [[0, 3, 6, 8, 11, 14], [0, 6, 8, 13], [0, 2, 8, 10, 12], [0, 7, 8, 12, 15]];
+      assert([0, 16, 32, 48].every(function (downbeat) { return bass.some(function (event) { return event.step === downbeat; }); }) &&
+        bass.every(function (event) { return bassCells.some(function (cell) { return cell.includes(event.step % 16); }); }), 'The bass lands on every downbeat and plays bass cells: ' + seed);
+      assert(shape(barOf(fill, 3)) === shape(barOf(fill, 0)), 'An answering part repeats with the returning A: ' + seed);
+      const lockedLead = Object.assign({}, band[0], { locked: true, events: lead });
+      assert(JSON.stringify(generator.generate([lockedLead, band[1]], bandSettings, 'ANOTHER-SEED').filter(function (event) { return event.laneId === 'pad'; })) !==
+        JSON.stringify(generator.generate([band[1]], bandSettings, 'ANOTHER-SEED')) || fill.length === 0, 'An answering part follows a locked lead: ' + seed);
+    }
+    assert(inside / insideSteps < 0.5 * (outside / outsideSteps), 'Answering parts play mostly in the lead\'s gaps: ' + (inside / insideSteps).toFixed(3) + ' vs ' + (outside / outsideSteps).toFixed(3));
+    assert(generator.roleNames.join(',') === 'lead,bass,fill', 'Role names are lead, bass and fill');
     return { passed: assertions.length, assertions };
   };
 })(typeof window !== 'undefined' ? window : globalThis);
