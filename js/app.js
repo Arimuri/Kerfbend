@@ -6,6 +6,8 @@
   const harmony = window.BlueLoopKeySync;
   const categories = window.BlueLoopSourceCategory;
   const engine = new window.BlueLoopAudio.Engine();
+  const MAX_SOURCES = 16;
+  const MAX_TOTAL_SECONDS = 240;
   const colors = ['#a7d1ff', '#d6bfff', '#e7e68c', '#ffb99f', '#9dd8c8', '#efb8d3', '#b7c6f5', '#ddc5a1'];
   const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
   const history = [];
@@ -77,7 +79,7 @@
     $('generate-button').disabled = empty || importing;
     $('undo-button').disabled = history.length === 0 || importing;
     $('export-button').disabled = empty || rendering || !state.buffer || importing;
-    $('demo-button').disabled = importing || state.lanes.length >= 8;
+    $('demo-button').disabled = importing || state.lanes.length >= MAX_SOURCES;
     $('clear-sources-button').disabled = importing || empty;
     $('file-input').disabled = importing;
     $('key-sync').disabled = importing;
@@ -293,7 +295,7 @@
       });
       groups.get(categories.get(lane)).append(row);
     });
-    $('source-count').textContent = `${state.lanes.length} / 8`;
+    $('source-count').textContent = `${state.lanes.length} / ${MAX_SOURCES}`;
   }
 
   function sequenceView() {
@@ -533,11 +535,11 @@
     const errors = [];
     const before = snapshot();
     for (const file of Array.from(fileList)) {
-      if (state.lanes.length >= 8) { errors.push('素材は最大8個です。不要な素材を×で削除して追加できます。'); break; }
+      if (state.lanes.length >= MAX_SOURCES) { errors.push(`素材は最大${MAX_SOURCES}個です。不要な素材を×で削除して追加できます。`); break; }
       try {
         const buffer = await engine.decodeFile(file);
         const total = state.lanes.reduce((seconds, lane) => seconds + lane.buffer.duration, 0);
-        if (total + buffer.duration > 120) throw new Error('素材の合計は120秒以内にしてください。');
+        if (total + buffer.duration > MAX_TOTAL_SECONDS) throw new Error(`素材の合計は${MAX_TOTAL_SECONDS}秒以内にしてください。`);
         analysisLabel = file.name;
         updateButtons();
         notify(`キーを確認中：${file.name}`, 15000);
@@ -584,7 +586,7 @@
         lane.keyShift = 0;
       });
       const existing = new Set(state.lanes.map((lane) => lane.id));
-      const capacity = Math.min(8 - state.lanes.length, Math.floor((120 - state.lanes.reduce((sum, lane) => sum + lane.buffer.duration, 0)) / 8));
+      const capacity = Math.min(MAX_SOURCES - state.lanes.length, Math.floor((MAX_TOTAL_SECONDS - state.lanes.reduce((sum, lane) => sum + lane.buffer.duration, 0)) / 8));
       const additions = demos.filter((lane) => !existing.has(lane.id)).slice(0, Math.max(0, capacity));
       if (additions.length) {
         if (!initial) remember();

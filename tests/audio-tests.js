@@ -419,6 +419,34 @@
       assert(Math.abs(decoded.duration - rendered.duration) < 0.001, 'Roundtrip changed duration');
       assert(decoded.numberOfChannels === 2 && peak(decoded) > 0.01, 'Roundtrip is silent or non-stereo');
     });
+    // Exercise the decoded-duration boundary without allocating two minutes of PCM.
+    async function importDecodedFrames(frames) {
+      var importer = new global.BlueLoopAudio.Engine();
+      var decoded = {
+        length: frames, sampleRate: 44100, numberOfChannels: 1,
+        duration: frames / 44100,
+        getChannelData: function () { throw new Error('Import validation must not read PCM'); }
+      };
+      importer._ensureContext = function () {
+        return { decodeAudioData: function () { return Promise.resolve(decoded); } };
+      };
+      var imported = await importer.decodeFile({
+        size: 1, arrayBuffer: function () { return Promise.resolve(new ArrayBuffer(1)); }
+      });
+      assert(imported === decoded, 'The decoded buffer was replaced during import');
+      return imported;
+    }
+    await test('Imports accept audio exactly 120 seconds long', async function () {
+      var imported = await importDecodedFrames(120 * 44100);
+      assert(imported.duration === 120, 'The 120-second boundary was not accepted intact');
+    });
+    await test('Imports reject audio one sample longer than 120 seconds', async function () {
+      var rejected = false;
+      try {
+        await importDecodedFrames(120 * 44100 + 1);
+      } catch (error) { rejected = /120 秒以下/.test(error.message); }
+      assert(rejected, 'Audio exceeding 120 seconds did not receive the correct duration error');
+    });
     await test('Oversized imports are rejected before reading file data', async function () {
       var rejected = false;
       try {

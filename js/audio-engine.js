@@ -3,7 +3,7 @@
 
   var SAMPLE_RATE = 44100;
   var MAX_FILE_BYTES = 40 * 1024 * 1024;
-  var MAX_FILE_SECONDS = 60;
+  var MAX_FILE_SECONDS = 120;
   var TAU = Math.PI * 2;
 
   function clamp(value, min, max) {
@@ -255,7 +255,7 @@
         throw new Error('音声を読み込めませんでした。WAV・MP3・M4A など、ブラウザが再生できる音声をお試しください。');
       }
       if (!isBuffer(buffer)) throw new Error('このファイルには音声データがありません。');
-      if (buffer.duration > MAX_FILE_SECONDS) throw new Error('音声は 60 秒以下にしてください。短く切り出してから読み込めます。');
+      if (buffer.duration > MAX_FILE_SECONDS) throw new Error('音声は ' + MAX_FILE_SECONDS + ' 秒以下にしてください。短く切り出してから読み込めます。');
       return buffer;
     }
 
