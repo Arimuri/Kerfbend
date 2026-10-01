@@ -7,7 +7,7 @@
   const categories = window.BlueLoopSourceCategory;
   const engine = new window.BlueLoopAudio.Engine();
   const colors = ['#a7d1ff', '#d6bfff', '#e7e68c', '#ffb99f', '#9dd8c8', '#efb8d3', '#b7c6f5', '#ddc5a1'];
-  const state = { settings: { ...generator.defaults, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
+  const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
   const history = [];
   const peaks = new WeakMap();
   let renderVersion = 0;
@@ -84,6 +84,8 @@
     $('target-key').disabled = importing || !state.settings.keySync;
     $('max-voices').disabled = importing;
     $('max-drum-voices').disabled = importing;
+    $('pitch-env-depth').disabled = importing;
+    $('pitch-env-time').disabled = importing;
     document.querySelectorAll('.source-key, .source-category').forEach((select) => { select.disabled = importing; });
     document.body.classList.toggle('busy', rendering || importing);
     document.body.classList.toggle('playing', playing);
@@ -156,6 +158,9 @@
     $('seed').value = state.seed;
     $('max-voices').value = state.settings.maxVoices;
     $('max-drum-voices').value = state.settings.maxDrumVoices;
+    $('pitch-env-depth').value = state.settings.pitchEnvDepth;
+    $('pitch-env-time').value = state.settings.pitchEnvTime;
+    showPitchEnvelope();
     $('duration').textContent = `${generator.duration(state.settings).toFixed(2)} SEC / LOOP`;
     $('key-sync').checked = state.settings.keySync;
     $('target-key').value = state.settings.targetKey === 'auto' ? 'auto' : `${keyPlan.target.tonic}:major`;
@@ -163,6 +168,19 @@
     const anchor = state.settings.targetKey === 'auto' ? (keyPlan.target && keyPlan.target.laneName ? `基準：${keyPlan.target.laneName}` : 'キー付きの素材を追加してください') : '手動で指定';
     $('key-anchor').textContent = state.settings.keySync ? anchor : '元のピッチで再生';
     $('key-anchor').title = $('key-anchor').textContent;
+  }
+
+  function showPitchEnvelope() {
+    const depth = Number($('pitch-env-depth').value);
+    const milliseconds = Number($('pitch-env-time').value);
+    $('pitch-env-depth-output').textContent = depth ? `±${depth} st` : 'OFF';
+    $('pitch-env-time-output').textContent = `${milliseconds} ms`;
+    rangeFill($('pitch-env-depth'));
+    rangeFill($('pitch-env-time'));
+    const height = depth / 24 * 20;
+    const end = 15 + milliseconds / 500 * 125;
+    $('pitch-env-up').setAttribute('d', `M5 ${25 - height} L${end} 25 H155`);
+    $('pitch-env-down').setAttribute('d', `M5 ${25 + height} L${end} 25 H155`);
   }
 
   function playbackEvents() {
@@ -393,13 +411,12 @@
       const data = lane.buffer.getChannelData(0);
       const peak = sourcePeak(lane.buffer);
       audible.filter((event) => event.laneId === lane.id).forEach((event) => {
-        const offset = event.step % 2 ? state.settings.swing / 100 : 0;
-        const x = (event.step + offset) * unit + 1;
-        const totalSemitones = window.BlueLoopAudio.pitchSemitones(lane, event);
-        const rate = Math.pow(2, totalSemitones / 12);
+        const playback = window.BlueLoopAudio.eventPlayback(lane, event, state.settings);
+        if (!playback) return;
         const stepSeconds = 60 / state.settings.bpm / 4;
-        const sliceSeconds = lane.buffer.duration / (event.sourceChop || state.settings.chop);
-        const noteSeconds = Math.min(sliceSeconds / rate, event.durationSteps * stepSeconds);
+        const x = playback.start / stepSeconds * unit + 1;
+        const totalSemitones = window.BlueLoopAudio.pitchSemitones(lane, event);
+        const noteSeconds = playback.duration;
         const w = Math.max(1, Math.min(noteSeconds / stepSeconds * unit - 1, width - x));
         const y = totalSemitones > 0 ? 9 : totalSemitones < 0 ? 25 : 17;
         const h = height - 34;
@@ -409,20 +426,37 @@
         context.globalAlpha = 1;
         context.fillStyle = '#30435c';
         context.globalAlpha = .38;
-        const sliceStart = Math.floor(event.startRatio * data.length);
-        const fullLength = Math.min(data.length - sliceStart, Math.floor(data.length / (event.sourceChop || state.settings.chop)));
-        const sourceLength = Math.min(fullLength, Math.round(noteSeconds * rate * lane.buffer.sampleRate));
-        const start = event.reverse ? sliceStart + fullLength - sourceLength : sliceStart;
+        const sliceStart = playback.offset * lane.buffer.sampleRate;
+        const sliceEnd = (playback.offset + playback.sliceSeconds) * lane.buffer.sampleRate;
+        const firstFrame = Math.max(0, Math.floor(sliceStart));
+        const lastFrame = Math.min(data.length - 1, Math.ceil(sliceEnd) - 1);
         const count = Math.max(2, Math.floor(w / 2));
         for (let point = 0; point < count; point++) {
-          const ratio = event.reverse ? 1 - point / count : point / count;
-          const frame = Math.min(data.length - 1, start + Math.floor(ratio * sourceLength));
+          const sourcePosition = playback.sourceSecondsAt(point / count * noteSeconds) * lane.buffer.sampleRate;
+          const frame = Math.floor(event.reverse ? sliceEnd - 1 - sourcePosition : sliceStart + sourcePosition);
           let amplitude = 0;
-          for (let sample = 0; sample < 7; sample++) amplitude = Math.max(amplitude, Math.abs(data[Math.min(data.length - 1, frame + sample * 23)] || 0));
+          for (let sample = 0; sample < 7; sample++) {
+            const position = Math.max(firstFrame, Math.min(lastFrame, frame + (event.reverse ? -1 : 1) * sample * 23));
+            amplitude = Math.max(amplitude, Math.abs(data[position] || 0));
+          }
           const line = Math.max(1, Math.min(h - 6, amplitude / peak * (h - 6)));
           context.fillRect(x + point * w / count, y + (h - line) / 2, 1, line);
         }
         context.globalAlpha = 1;
+        if (playback.envelope.enabled && w > 8) {
+          context.strokeStyle = '#244ce5';
+          context.globalAlpha = .65;
+          context.beginPath();
+          for (let point = 0; point <= count; point++) {
+            const time = point / count * noteSeconds;
+            const bend = 12 * Math.log2(playback.envelope.rateAt(time) / playback.rate);
+            const curveY = y + h / 2 - bend / 24 * (h / 2 - 3);
+            if (point === 0) context.moveTo(x, curveY);
+            else context.lineTo(x + w * point / count, curveY);
+          }
+          context.stroke();
+          context.globalAlpha = 1;
+        }
         if (event.reverse) {
           context.strokeStyle = '#37496755';
           context.beginPath();
@@ -612,6 +646,18 @@
     updateView();
     renderAudio();
   }));
+  [['pitch-env-depth', 'pitchEnvDepth'], ['pitch-env-time', 'pitchEnvTime']].forEach(([id, key]) => {
+    $(id).addEventListener('input', showPitchEnvelope);
+    $(id).addEventListener('change', () => {
+      if (importing) { syncSettings(); return; }
+      const value = Number($(id).value);
+      if (!Number.isFinite(value) || value === state.settings[key]) return;
+      remember();
+      state.settings[key] = value;
+      updateView();
+      renderAudio();
+    });
+  });
   $('seed').addEventListener('change', () => {
     if (importing) { syncSettings(); return; }
     const seed = generator.seedString($('seed').value);

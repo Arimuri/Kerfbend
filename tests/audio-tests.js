@@ -28,15 +28,17 @@
     return difference;
   }
 
-  function toneFrequency(buffer) {
+  function toneFrequency(buffer, fromSeconds, toSeconds) {
     var data = buffer.getChannelData(0);
     var crossings = [];
-    for (var frame = Math.ceil(buffer.sampleRate * 0.025); frame < buffer.sampleRate * 0.15; frame++) {
+    var from = fromSeconds == null ? 0.025 : fromSeconds;
+    var to = toSeconds == null ? 0.15 : toSeconds;
+    for (var frame = Math.max(1, Math.ceil(buffer.sampleRate * from)); frame < buffer.sampleRate * to; frame++) {
       if (data[frame - 1] <= 0 && data[frame] > 0) {
         crossings.push(frame - 1 - data[frame - 1] / (data[frame] - data[frame - 1]));
       }
     }
-    assert(crossings.length > 10, 'Rendered tone is missing');
+    assert(crossings.length > 2, 'Rendered tone is missing');
     return (crossings.length - 1) * buffer.sampleRate / (crossings[crossings.length - 1] - crossings[0]);
   }
 
@@ -243,6 +245,146 @@
       sources.forEach(function (lane, index) {
         assert(lane.buffer.getChannelData(0).every(function (sample, frame) { return sample === originalPCM[index][frame]; }), 'Separate caps changed source PCM');
       });
+    });
+
+    function envelopeFixture(direction, overrides) {
+      assert(global.BlueLoopPitchEnvelope, 'Load pitch-envelope.js to verify the renderer integration');
+      var config = Object.assign({ bpm: 120, bars: 1, chop: 1, pitchEnvDepth: 12, pitchEnvTime: 180 }, overrides);
+      var buffer = engine.context.createBuffer(1, 44100, 44100);
+      var samples = buffer.getChannelData(0);
+      for (var frame = 0; frame < samples.length; frame++) samples[frame] = Math.sin(2 * Math.PI * 440 * frame / 44100) * 0.25;
+      for (var candidate = 0; candidate < 100; candidate++) {
+        var lane = { id: 'envelope-' + candidate, buffer: buffer, volume: 1, locked: true };
+        var event = { laneId: lane.id, step: 0, sliceIndex: 0, durationSteps: 4, velocity: 1 };
+        if (Math.sign(global.BlueLoopAudio.eventPlayback(lane, event, config).envelope.depth) === direction) {
+          return { lane: lane, event: event, settings: config };
+        }
+      }
+      throw new Error('Could not find the requested deterministic envelope direction');
+    }
+
+    await test('Pitch envelope starts above or below the source and returns to its original pitch', async function () {
+      for (var sign of [-1, 1]) {
+        var fixture = envelopeFixture(sign);
+        var output = await engine.render([fixture.lane], fixture.settings, [fixture.event]);
+        var early = toneFrequency(output, 0.015, 0.05);
+        var settled = toneFrequency(output, 0.25, 0.4);
+        assert(sign < 0 ? early < 330 : early > 650, 'Envelope did not bend in the requested direction: ' + early);
+        assert(Math.abs(settled - 440) < 0.1, 'Envelope did not return to the source pitch: ' + settled);
+      }
+    });
+    await test('Pitch envelope returns to the combined key correction and octave pitch', async function () {
+      var fixture = envelopeFixture(1);
+      fixture.lane.keyShift = 5;
+      fixture.event.semitones = -12;
+      var output = await engine.render([fixture.lane], fixture.settings, [fixture.event]);
+      var baseFrequency = 440 * Math.pow(2, -7 / 12);
+      var settled = toneFrequency(output, 0.25, 0.4);
+      assert(Math.abs(settled - baseFrequency) < 0.1, 'Envelope replaced key or octave correction');
+      assert(toneFrequency(output, 0.015, 0.05) > baseFrequency * 1.45, 'Envelope did not add its pitch to key and octave');
+    });
+    await test('Each slice restarts its envelope with a deterministic direction', async function () {
+      var fixture = envelopeFixture(1);
+      var events = [fixture.event, Object.assign({}, fixture.event, { step: 4 })];
+      var first = await engine.render([fixture.lane], fixture.settings, events);
+      var repeated = await engine.render([fixture.lane], fixture.settings, events);
+      assert(maximumDifference(first, repeated) === 0, 'Repeated envelope render produced different PCM');
+      events.forEach(function (event) {
+        var playback = global.BlueLoopAudio.eventPlayback(fixture.lane, event, fixture.settings);
+        var early = toneFrequency(first, playback.start + 0.015, playback.start + 0.05);
+        var settled = toneFrequency(first, playback.start + 0.25, playback.start + 0.4);
+        assert(playback.envelope.depth < 0 ? early < 330 : early > 650, 'A slice inherited the previous envelope state');
+        assert(Math.abs(settled - 440) < 0.1, 'A slice did not settle to its base pitch');
+      });
+    });
+    await test('Pitch envelope can be disabled without changing locked events or original PCM', async function () {
+      var fixture = envelopeFixture(-1);
+      fixture.event.reverse = true;
+      fixture.event.semitones = 12;
+      fixture.lane.keyShift = -3;
+      Object.freeze(fixture.event);
+      var beforeEvent = JSON.stringify(fixture.event);
+      var beforePCM = fixture.lane.buffer.getChannelData(0).slice();
+      var offSettings = Object.assign({}, fixture.settings);
+      delete offSettings.pitchEnvDepth;
+      delete offSettings.pitchEnvTime;
+      var before = await engine.render([fixture.lane], offSettings, [fixture.event]);
+      var enabled = await engine.render([fixture.lane], fixture.settings, [fixture.event]);
+      assert(maximumDifference(before, enabled) > 0.05, 'Envelope did not affect a locked event');
+      for (var time of [5, 500]) {
+        var restored = await engine.render([fixture.lane], Object.assign({}, fixture.settings, { pitchEnvDepth: 0, pitchEnvTime: time }), [fixture.event]);
+        assert(maximumDifference(before, restored) === 0, 'Disabling the envelope did not restore identical PCM');
+      }
+      assert(JSON.stringify(fixture.event) === beforeEvent, 'Envelope changed source event metadata');
+      assert(fixture.lane.buffer.getChannelData(0).every(function (sample, index) { return sample === beforePCM[index]; }), 'Envelope changed the original source PCM');
+    });
+    await test('Swung forward and reverse audio follows the shared envelope source-position helper', async function () {
+      var fixture = envelopeFixture(1, { swing: 50, pitchEnvTime: 83 });
+      var data = fixture.lane.buffer.getChannelData(0);
+      for (var frame = 0; frame < data.length; frame++) data[frame] = frame / data.length * 0.25;
+      fixture.event.step = 1;
+      fixture.event.startRatio = 0.25;
+      fixture.event.sourceChop = 2;
+      for (var reverse of [false, true]) {
+        fixture.event.reverse = reverse;
+        var playback = global.BlueLoopAudio.eventPlayback(fixture.lane, fixture.event, fixture.settings);
+        var output = await engine.render([fixture.lane], fixture.settings, [fixture.event]);
+        var samples = output.getChannelData(0);
+        var largestError = 0;
+        for (var sample = Math.ceil((playback.start + 0.01) * 44100); sample < (playback.start + playback.duration - 0.01) * 44100; sample += 37) {
+          var consumed = playback.sourceSecondsAt(sample / 44100 - playback.start);
+          var position = reverse ? playback.offset + playback.sliceSeconds - 1 / 44100 - consumed : playback.offset + consumed;
+          largestError = Math.max(largestError, Math.abs(samples[sample] - position * 0.25 * 0.8));
+        }
+        assert(largestError < 0.0001, 'Timeline source position disagrees with rendered PCM: ' + largestError);
+      }
+    });
+    await test('Envelope resampling never reads adjacent slices in either direction', async function () {
+      for (var sign of [-1, 1]) {
+        var fixture = envelopeFixture(sign, { chop: 4, pitchEnvDepth: 24, pitchEnvTime: 5 });
+        var data = fixture.lane.buffer.getChannelData(0);
+        data.fill(0.8);
+        data.fill(0, 11025, 22050);
+        fixture.event.sliceIndex = 1;
+        for (var reverse of [false, true]) {
+          fixture.event.reverse = reverse;
+          var output = await engine.render([fixture.lane], fixture.settings, [fixture.event]);
+          assert(peak(output) === 0, 'Adjacent source marker leaked into a silent selected slice');
+        }
+      }
+    });
+    await test('Very short enveloped slices finish their fade within the selected audio', async function () {
+      for (var sign of [-1, 1]) {
+        var fixture = envelopeFixture(sign, { chop: 128, pitchEnvDepth: 24, pitchEnvTime: 5 });
+        fixture.lane.buffer = engine.context.createBuffer(1, 11264, 44100);
+        fixture.lane.buffer.getChannelData(0).fill(0.2);
+        var playback = global.BlueLoopAudio.eventPlayback(fixture.lane, fixture.event, fixture.settings);
+        var output = await engine.render([fixture.lane], fixture.settings, [fixture.event]);
+        assert(peak(output) > 0 && peak(output) <= 0.160001, 'Short slice is silent, non-finite or amplified');
+        var samples = output.getChannelData(0);
+        var finish = Math.ceil(playback.duration * 44100);
+        assert(Math.abs(samples[finish - 1]) < 0.06, 'Short slice stopped before completing its fade');
+        assert(samples.subarray(finish + 1).every(function (value) { return value === 0; }), 'Short slice exceeded its calculated duration');
+      }
+    });
+    await test('Envelope changes preserve voice selection, exact musical length and exported PCM', async function () {
+      var config = Object.assign({}, settings, { maxVoices: 1, maxDrumVoices: 1, pitchEnvDepth: 24, pitchEnvTime: 500 });
+      var beforeEvents = JSON.stringify(events);
+      var selected = global.BlueLoopPlayback.plan(lanes, config, events);
+      var output = await engine.render(lanes, config, events);
+      var withoutCaps = Object.assign({}, config);
+      delete withoutCaps.maxVoices;
+      delete withoutCaps.maxDrumVoices;
+      var explicitSelection = await engine.render(lanes, withoutCaps, selected);
+      assert(maximumDifference(output, explicitSelection) === 0, 'Envelope affected voice allocation');
+      assert(output.length === rendered.length && output.sampleRate === 44100, 'Envelope changed musical loop length or sample rate');
+      assert(peak(output) > 0 && peak(output) <= 0.950001, 'Envelope produced silent or clipped output');
+      var wav = new DataView(await engine.encodeWav(output).arrayBuffer());
+      assert(wav.byteLength === 44 + output.length * 4, 'Envelope export changed WAV length');
+      var samples = output.getChannelData(0);
+      var frame = samples.findIndex(function (sample) { return Math.abs(sample) > 0.02; });
+      assert(wav.getInt16(44 + frame * 4, true) === Math.round(samples[frame] * (samples[frame] < 0 ? 32768 : 32767)), 'Envelope export differs from rendered playback');
+      assert(JSON.stringify(events) === beforeEvents, 'Envelope changed generated events');
     });
     await test('Hot overlap is scaled below the 0.95 peak ceiling', async function () {
       var overlaps = Array.from({ length: 40 }, function () {

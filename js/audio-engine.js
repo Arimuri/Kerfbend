@@ -52,6 +52,43 @@
     return context.createBuffer(channels, frames, sampleRate);
   }
 
+  // Shared by rendering and the timeline so both follow the same source position.
+  function eventPlayback(lane, event, settings) {
+    settings = settings || {};
+    if (!lane || !event || !isBuffer(lane.buffer)) return null;
+    var bpm = number(settings.bpm, 120);
+    var bars = number(settings.bars, 4);
+    var step = number(event.step, -1);
+    if (bpm <= 0 || bars <= 0 || step < 0 || step >= bars * 16) return null;
+    var stepSeconds = 60 / bpm / 4;
+    var chop = clamp(Math.round(number(settings.chop, 16)), 1, 128);
+    var swing = clamp(number(settings.swing, 0), 0, 50) / 100;
+    var rate = Math.pow(2, pitchSemitones(lane, event) / 12);
+    var eventChop = clamp(Math.round(number(event.sourceChop, chop)), 1, 128);
+    var startRatio = event.startRatio == null
+      ? clamp(number(event.sliceIndex, 0), 0, eventChop - 1) / eventChop
+      : clamp(number(event.startRatio, 0), 0, 1);
+    var offset = startRatio * lane.buffer.duration;
+    var sliceSeconds = Math.min(lane.buffer.duration / eventChop, lane.buffer.duration - offset);
+    var start = step * stepSeconds + (Math.floor(step) % 2 ? swing * stepSeconds : 0);
+    var envelope = global.BlueLoopPitchEnvelope
+      ? global.BlueLoopPitchEnvelope.create(rate, event, settings, start, SAMPLE_RATE)
+      : {
+        enabled: false, depth: 0, baseRate: rate, startRate: rate, decaySeconds: 0,
+        points: [{ time: 0, rate: rate }],
+        sourceSecondsAt: function (time) { return Math.max(0, time) * rate; },
+        durationFor: function (seconds) { return Math.max(0, seconds) / rate; },
+        rateAt: function () { return rate; }
+      };
+    var duration = Math.min(envelope.durationFor(sliceSeconds),
+      clamp(number(event.durationSteps, 1), 0, bars * 16) * stepSeconds);
+    if (duration <= 0) return null;
+    return {
+      start: start, offset: offset, sliceSeconds: sliceSeconds, rate: rate,
+      duration: duration, envelope: envelope, sourceSecondsAt: envelope.sourceSecondsAt
+    };
+  }
+
   function makeDemo(context, kind, seed) {
     var duration = 8;
     var buffer = makeBuffer(context, 2, SAMPLE_RATE * duration, SAMPLE_RATE);
@@ -169,6 +206,7 @@
       this._preview = null;
       this._playRequest = 0;
       this._reverseBuffers = new WeakMap();
+      this._sliceBuffers = new WeakMap();
     }
 
     _ensureContext() {
@@ -235,6 +273,45 @@
       return reversed;
     }
 
+    _isolatedSlice(buffer, offset, seconds, reverse, context) {
+      var cache = this._sliceBuffers.get(buffer);
+      if (!cache) {
+        cache = { entries: new Map(), frames: 0 };
+        this._sliceBuffers.set(buffer, cache);
+      }
+      var key = offset + ':' + seconds + ':' + !!reverse;
+      var isolated = cache.entries.get(key);
+      if (!isolated) {
+        var sampleRate = buffer.sampleRate;
+        var start = offset * sampleRate;
+        var length = seconds * sampleRate;
+        var first = Math.min(buffer.length - 1, Math.ceil(start - 1e-7));
+        var last = Math.max(first, Math.min(buffer.length - 1, Math.ceil(start + length - 1e-7) - 1));
+        isolated = makeBuffer(context, buffer.numberOfChannels, clamp(Math.ceil(length), 1, buffer.length), sampleRate);
+        for (var channel = 0; channel < buffer.numberOfChannels; channel++) {
+          var source = buffer.getChannelData(channel);
+          var target = isolated.getChannelData(channel);
+          for (var frame = 0; frame < target.length; frame++) {
+            var position = reverse ? start + length - 1 - frame : start + frame;
+            var lower = Math.floor(position);
+            var fraction = position - lower;
+            var a = source[clamp(lower, first, last)];
+            var b = source[clamp(lower + 1, first, last)];
+            target[frame] = a + (b - a) * fraction;
+          }
+        }
+        // Retain at most twice the original PCM and a bounded number of slices.
+        while (cache.entries.size && (cache.entries.size >= 256 || cache.frames + isolated.length > buffer.length * 2)) {
+          var oldest = cache.entries.keys().next().value;
+          cache.frames -= cache.entries.get(oldest).length;
+          cache.entries.delete(oldest);
+        }
+        cache.entries.set(key, isolated);
+        cache.frames += isolated.length;
+      }
+      return isolated;
+    }
+
     async render(lanes, settings, events) {
       settings = settings || {};
       if (!Array.isArray(lanes)) throw new Error('音声トラックがありません。');
@@ -246,8 +323,6 @@
       var duration = bars * 4 * 60 / bpm;
       var frameCount = Math.round(duration * SAMPLE_RATE);
       var stepSeconds = 60 / bpm / 4;
-      var chop = clamp(Math.round(number(settings.chop, 16)), 1, 128);
-      var swing = clamp(number(settings.swing, 0), 0, 50) / 100;
       var space = clamp(number(settings.space, 0), 0, 100) / 100;
       var hasSolo = lanes.some(function (lane) { return lane.solo; });
       var laneMap = new Map(lanes.filter(function (lane) {
@@ -263,25 +338,13 @@
       var latestEnd = duration;
       events.forEach(function (event) {
         var lane = laneMap.get(event.laneId);
-        var step = number(event.step, -1);
-        if (!lane || step < 0 || step >= bars * 16) return;
-        var rate = Math.pow(2, pitchSemitones(lane, event) / 12);
-        var eventChop = clamp(Math.round(number(event.sourceChop, chop)), 1, 128);
-        var startRatio = event.startRatio == null
-          ? clamp(number(event.sliceIndex, 0), 0, eventChop - 1) / eventChop
-          : clamp(number(event.startRatio, 0), 0, 1);
-        var offset = startRatio * lane.buffer.duration;
-        var sliceSeconds = Math.min(lane.buffer.duration / eventChop, lane.buffer.duration - offset);
-        var noteSeconds = Math.min(sliceSeconds / rate,
-          clamp(number(event.durationSteps, 1), 0, bars * 16) * stepSeconds);
-        if (noteSeconds <= 0) return;
-        var start = step * stepSeconds + (Math.floor(step) % 2 ? swing * stepSeconds : 0);
-        scheduled.push({
-          lane: lane, event: event, rate: rate, offset: offset, sliceSeconds: sliceSeconds,
-          duration: noteSeconds, start: start,
+        var playback = eventPlayback(lane, event, settings);
+        if (!playback) return;
+        scheduled.push(Object.assign({}, playback, {
+          lane: lane, event: event,
           gain: clamp(number(lane.volume, 0.7), 0, 1.5) * clamp(number(event.velocity, 0.8), 0, 1)
-        });
-        latestEnd = Math.max(latestEnd, start + noteSeconds);
+        }));
+        latestEnd = Math.max(latestEnd, playback.start + playback.duration);
       });
       var echoDelay = stepSeconds * 3;
       var tailSeconds = space ? echoDelay * 3 + 0.04 : 0;
@@ -313,8 +376,16 @@
       var eventSum = null;
       scheduled.forEach(function (item) {
         var source = offline.createBufferSource();
-        source.buffer = item.event.reverse ? engine._reversed(item.lane.buffer, offline) : item.lane.buffer;
-        source.playbackRate.value = item.rate;
+        if (item.envelope.enabled) {
+          source.buffer = engine._isolatedSlice(item.lane.buffer, item.offset, item.sliceSeconds, item.event.reverse, offline);
+          source.playbackRate.value = item.envelope.startRate;
+          item.envelope.points.forEach(function (point) {
+            source.playbackRate.setValueAtTime(point.rate, item.start + point.time);
+          });
+        } else {
+          source.buffer = item.event.reverse ? engine._reversed(item.lane.buffer, offline) : item.lane.buffer;
+          source.playbackRate.value = item.rate;
+        }
         var gain = offline.createGain();
         var fade = Math.min(0.006, item.duration / 3);
         gain.gain.setValueAtTime(0, item.start);
@@ -330,7 +401,8 @@
         var offset = item.event.reverse
           ? Math.max(0, item.lane.buffer.duration - item.offset - item.sliceSeconds)
           : item.offset;
-        source.start(item.start, offset, item.duration * item.rate);
+        if (item.envelope.enabled) source.start(item.start, 0, item.sliceSeconds);
+        else source.start(item.start, offset, item.duration * item.rate);
         source.stop(item.start + item.duration + 1 / SAMPLE_RATE);
       });
       if (eventSum) eventSum.connect(bus);
@@ -458,5 +530,8 @@
     }
   }
 
-  global.BlueLoopAudio = { Engine: Engine, encodeWav: encodeWav, pitchSemitones: pitchSemitones, SAMPLE_RATE: SAMPLE_RATE };
+  global.BlueLoopAudio = {
+    Engine: Engine, encodeWav: encodeWav, pitchSemitones: pitchSemitones,
+    eventPlayback: eventPlayback, SAMPLE_RATE: SAMPLE_RATE
+  };
 })(window);
