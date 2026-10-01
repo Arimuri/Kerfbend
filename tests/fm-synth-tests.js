@@ -140,6 +140,18 @@
       return pcm[first] === 0 && pcm[last] === 0 && Math.abs(pcm[first + 1]) < 0.001 && Math.abs(pcm[last - 1]) < 0.001;
     }) && pcm[0] === 0 && pcm[pcm.length - 1] === 0, 'Each attack, release and buffer boundary reaches silence without a discontinuity');
 
+    const lowSine = synth.synthesize(context, { seed: 'LOW', bars: 2, bpm: 90, tonic: 0, octave: 1, density: 40, decay: 1200 });
+    const lowPCM = lowSine.buffer.getChannelData(0);
+    assert(lowSine.phrase.notes.every(function (note) {
+      const frequency = 440 * Math.pow(2, (note.midi - 69) / 12);
+      const quarter = Math.floor(44100 / frequency / 4);
+      const first = Math.round(note.start * 44100);
+      const frames = Math.round((note.start + note.duration) * 44100) - first;
+      if (frames < 44100 / frequency * 4) return true;
+      let early = 0;
+      for (let frame = first; frame < first + quarter; frame++) early = Math.max(early, Math.abs(lowPCM[frame]));
+      return early < 0.25 * 0.78 * note.velocity;
+    }), 'Low pure sines fade in over a whole cycle instead of starting with a thump');
     const pureOptions = { seed: 'spectrum', bars: 2, bpm: 40, tonic: 9, octave: 3, density: 0, index: 0, ratio: 2, decay: 1200 };
     const pure = synth.synthesize(context, pureOptions);
     const bright = synth.synthesize(context, Object.assign({}, pureOptions, { index: 3 }));

@@ -54,10 +54,18 @@
     // slice that already had an envelope, with the same direction and shape.
     const selected = maximum > 0 && (chance >= 1 || unit(event, 'chance') < chance);
     // The depth control is the largest swing; spread lowers individual slices
-    // towards zero. Time spreads evenly on a log scale, up to 4x either way.
-    const magnitude = selected ? maximum * (1 - depthSpread * unit(event, 'depth')) : 0;
+    // in whole semitones down to one, so no slice starts merely out of tune.
+    const spreadDepth = Math.min(maximum, Math.max(1, Math.round(maximum * (1 - depthSpread * unit(event, 'depth')))));
+    const magnitude = selected ? (depthSpread > 0 ? spreadDepth : maximum) : 0;
     let decaySeconds = clamp(number(params.pitchEnvTime, 80), 5, 500) / 1000;
-    if (timeSpread > 0) decaySeconds = clamp(decaySeconds * Math.pow(4, timeSpread * (2 * unit(event, 'time') - 1)), 0.005, 0.5);
+    if (timeSpread > 0) {
+      // Time spreads evenly on a log scale, up to 4x either way, but a longer
+      // return still settles within 70% of the slice's gate.
+      const item = event || {};
+      const gate = Math.max(0, number(item.durationSteps, 0)) * 15 / clamp(number(params.bpm, 120), 30, 300);
+      const spread = decaySeconds * Math.pow(4, timeSpread * (2 * unit(event, 'time') - 1));
+      decaySeconds = clamp(Math.min(spread, Math.max(decaySeconds, 0.7 * gate)), 0.005, 0.5);
+    }
     const depth = magnitude ? magnitude * direction(event) : 0;
     const startRate = base * Math.pow(2, depth / 12);
     const points = [{ time: 0, rate: startRate }];

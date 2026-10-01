@@ -398,8 +398,10 @@
         }
         var gain = offline.createGain();
         var fade = Math.min(0.006, item.duration / 3);
-        // Pure tones (FM sources) close over a few cycles so cut notes do not click.
-        var release = Math.min(clamp(number(item.lane.releaseSeconds, 0.006), 0.006, 0.05), item.duration / 3);
+        // Pure tones (FM sources) close over a few cycles when a note is cut;
+        // a cut that plays its notes to the end keeps the short fade.
+        var truncated = item.duration < item.envelope.durationFor(item.sliceSeconds) - 0.001;
+        var release = truncated ? Math.min(clamp(number(item.lane.releaseSeconds, 0.006), 0.006, 0.05), item.duration / 3) : fade;
         gain.gain.setValueAtTime(0, item.start);
         gain.gain.linearRampToValueAtTime(item.gain, item.start + fade);
         gain.gain.setValueAtTime(item.gain, item.start + item.duration - release);

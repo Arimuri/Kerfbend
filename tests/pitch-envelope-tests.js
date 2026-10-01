@@ -106,7 +106,7 @@
     assert(envelope.create(1, event, { pitchEnvDepth: 24, pitchEnvTime: 500 }).points.length <= 174, 'Longest 44.1 kHz envelope uses a bounded number of quantum points');
 
     const slices = Array.from({ length: 1200 }, function (_, index) {
-      return { laneId: 'part-' + index % 5, step: index % 64, sliceIndex: index % 16, startRatio: index % 16 / 16, sourceChop: 16, velocity: 0.5 + index / 2400 };
+      return { laneId: 'part-' + index % 5, step: index % 64, sliceIndex: index % 16, startRatio: index % 16 / 16, sourceChop: 16, velocity: 0.5 + index / 2400, durationSteps: 8 };
     });
     const always = slices.map(function (slice) { return envelope.create(1, slice, settings); });
     const selections = {};
@@ -132,8 +132,9 @@
       const curves = slices.map(function (slice) { return envelope.create(1, slice, Object.assign({ pitchEnvDepthRandom: spread }, settings)); });
       const magnitudes = curves.map(function (curve) { return Math.abs(curve.depth); });
       const mean = magnitudes.reduce(function (sum, value) { return sum + value; }, 0) / magnitudes.length;
-      assert(magnitudes.every(function (value) { return value <= 12 && value >= 12 * (1 - spread / 100) - 1e-12; }), 'Depth spread ' + spread + '% keeps every slice between the lowered and the maximum depth');
-      assert(Math.abs(mean - 12 * (1 - spread / 200)) < 0.4 && new Set(magnitudes.map(function (value) { return value.toFixed(3); })).size > 300, 'Depth spread ' + spread + '% varies slices evenly across its range');
+      const lowest = Math.max(1, Math.round(12 * (1 - spread / 100)));
+      assert(magnitudes.every(function (value) { return Number.isInteger(value) && value <= 12 && value >= lowest; }), 'Depth spread ' + spread + '% keeps whole-semitone depths from ' + lowest + ' to the maximum');
+      assert(Math.abs(mean - 12 * (1 - spread / 200)) < 0.5 && new Set(magnitudes).size >= 13 - lowest, 'Depth spread ' + spread + '% uses every whole-semitone depth in its range');
       assert(curves.every(function (curve, index) {
         return Math.sign(curve.depth) === Math.sign(always[index].depth) && curve.decaySeconds === 0.08 && near(curve.startRate, Math.pow(2, curve.depth / 12));
       }), 'Depth spread ' + spread + '% keeps each slice direction and return time');
@@ -154,6 +155,19 @@
           curve.points[curve.points.length - 1].rate === curve.baseRate;
       }), 'Time spread ' + spread + '% retains exact source consumption and settles at the base rate');
     });
+    [[90, 1], [120, 1], [160, 2], [120, 3]].forEach(function (values) {
+      const bpm = values[0];
+      const steps = values[1];
+      const gate = steps * 15 / bpm;
+      const ceiling = Math.max(0.08, 0.7 * gate);
+      const short = slices.slice(0, 300).map(function (slice) {
+        return envelope.create(1, Object.assign({}, slice, { durationSteps: steps }), { pitchEnvDepth: 24, pitchEnvTime: 80, pitchEnvTimeRandom: 100, bpm });
+      });
+      const plain = envelope.create(1, Object.assign({}, slices[0], { durationSteps: steps }), { pitchEnvDepth: 24, pitchEnvTime: 500, bpm });
+      assert(short.every(function (curve) { return curve.decaySeconds >= 0.02 - 1e-12 && curve.decaySeconds <= ceiling + 1e-12 && curve.rateAt(ceiling + 0.003) === curve.baseRate; }) &&
+        short.some(function (curve) { return curve.decaySeconds > 0.08; }) === (ceiling > 0.08) && plain.decaySeconds === 0.5,
+      'Spread never lengthens a return past the set time or 70% of a ' + steps + '-step gate at ' + bpm + ' BPM');
+    });
     [[500, 0.5], [5, 0.005]].forEach(function (values) {
       const times = slices.slice(0, 300).map(function (slice) {
         return envelope.create(1, slice, { pitchEnvDepth: 12, pitchEnvTime: values[0], pitchEnvTimeRandom: 100 }).decaySeconds;
@@ -165,7 +179,7 @@
     const spreadCurve = envelope.create(1, slices[7], spreadSettings);
     assert(controls.every(function (change) {
       const changed = envelope.create(1, Object.assign({}, slices[7], change), spreadSettings);
-      return changed.depth === spreadCurve.depth && changed.decaySeconds === spreadCurve.decaySeconds && changed.enabled === spreadCurve.enabled;
+      return changed.depth === spreadCurve.depth && changed.enabled === spreadCurve.enabled && (change.durationSteps != null || changed.decaySeconds === spreadCurve.decaySeconds);
     }), 'Octave, reverse, locks, mixer state and gates do not reroll chance or spreads');
     return { passed: assertions.length, assertions };
   };

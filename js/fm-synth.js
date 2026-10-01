@@ -195,8 +195,11 @@
       let modulation = Math.min(settings.index, safeIndex);
       let amplitude = 0.78 * note.velocity;
       let phase = 0;
-      const attack = Math.max(1, Math.min(Math.round(0.004 * SAMPLE_RATE), Math.floor(frames / 4)));
-      const release = Math.max(1, Math.min(Math.round(0.012 * SAMPLE_RATE), Math.floor(frames / 4)));
+      // Fade over at least one cycle in and one and a half cycles out, so low
+      // pure sines start and stop without a thump.
+      const period = SAMPLE_RATE / frequency;
+      const attack = Math.max(1, Math.min(Math.round(Math.max(0.004 * SAMPLE_RATE, period)), Math.floor(frames / 4)));
+      const release = Math.max(1, Math.min(Math.round(Math.max(0.012 * SAMPLE_RATE, 1.5 * period)), Math.floor(frames / 4)));
 
       for (let frame = 0; frame < frames; frame++) {
         let window = 1;

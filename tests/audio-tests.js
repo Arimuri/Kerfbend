@@ -383,6 +383,10 @@
       assert(Math.abs(before(plain, 0.015) - 0.4) < 1e-3 && Math.abs(before(soft, 0.015) - 0.2) < 0.005, 'A 30 ms release did not halve the level 15 ms before the cut');
       assert(Math.abs(before(soft, 0.024) - 0.4 * 0.8) < 0.005 && before(soft, 0.001) < 0.02, 'The release did not ramp linearly to silence at the cut');
       assert(Math.abs(before(capped, 0.025) - 0.2) < 0.005, 'Release times longer than 50 ms were not capped');
+      var whole = { laneId: 'tone', step: 0, sliceIndex: 0, startRatio: 0, lengthRatio: 0.2, durationSteps: 4, velocity: 1 };
+      var shortFade = await engine.render([{ id: 'tone', buffer: buffer, volume: 1 }], settings, [whole]);
+      var keptFade = await engine.render([{ id: 'tone', buffer: buffer, volume: 1, releaseSeconds: 0.03 }], settings, [whole]);
+      assert(maximumDifference(shortFade, keptFade) === 0, 'A cut that plays to its end must keep the short fade');
       var untouched = Math.round((0.25 - 0.06) * 44100);
       var a = plain.getChannelData(0);
       var b = soft.getChannelData(0);
