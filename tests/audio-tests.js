@@ -284,6 +284,55 @@
       } catch (error) { rejected = /40 MB/.test(error.message); }
       assert(rejected, 'Oversized file did not receive a clear size error');
     });
+    await test('Stopping while preview initialization is pending prevents deleted audio from starting later', async function () {
+      var originalInit = engine.init;
+      var resume;
+      engine.init = function () { return new Promise(function (resolve) { resume = resolve; }); };
+      try {
+        var pending = engine.playPreview(lanes[0].buffer);
+        engine.stop();
+        resume(engine.context);
+        var source = await pending;
+        assert(!source && !engine._preview && !engine.isPlaying, 'A cancelled preview started after stop');
+      } finally {
+        engine.init = originalInit;
+        engine.stop();
+      }
+    });
+    await test('A delayed preview cannot interrupt a newer loop playback', async function () {
+      var originalInit = engine.init;
+      var resume;
+      engine.init = function () { return new Promise(function (resolve) { resume = resolve; }); };
+      try {
+        var pending = engine.playPreview(lanes[0].buffer);
+        engine.init = function () { return Promise.resolve(engine.context); };
+        var current = await engine.play(rendered);
+        resume(engine.context);
+        var stale = await pending;
+        assert(current && !stale && engine.source === current && !engine._preview, 'An older preview interrupted or overlapped the newer loop');
+      } finally {
+        engine.init = originalInit;
+        engine.stop();
+      }
+    });
+    await test('A delayed preview cannot replace a newer sample preview', async function () {
+      var originalInit = engine.init;
+      var resume;
+      engine.init = function () { return new Promise(function (resolve) { resume = resolve; }); };
+      try {
+        var pending = engine.playPreview(lanes[0].buffer);
+        engine.init = function () { return Promise.resolve(engine.context); };
+        var current = await engine.playPreview(lanes[1].buffer);
+        resume(engine.context);
+        var stale = await pending;
+        assert(current && !stale && engine._preview === current, 'An older sample preview replaced the latest selection');
+        engine.stop();
+        assert(!engine._preview, 'Stopping failed to release the active preview');
+      } finally {
+        engine.init = originalInit;
+        engine.stop();
+      }
+    });
     engine.stop();
     if (engine.context) await engine.context.close();
     return {

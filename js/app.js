@@ -78,6 +78,7 @@
     $('undo-button').disabled = history.length === 0 || importing;
     $('export-button').disabled = empty || rendering || !state.buffer || importing;
     $('demo-button').disabled = importing || state.lanes.length >= 8;
+    $('clear-sources-button').disabled = importing || empty;
     $('file-input').disabled = importing;
     $('key-sync').disabled = importing;
     $('target-key').disabled = importing || !state.settings.keySync;
@@ -257,8 +258,8 @@
       preview.addEventListener('click', async () => {
         try {
           stop();
-          await engine.playPreview(lane.buffer);
-          notify(`${lane.name} / 元の素材を試聴中`);
+          const previewSource = await engine.playPreview(lane.buffer);
+          if (previewSource) notify(`${lane.name} / 元の素材を試聴中`);
         } catch (error) { notify(error.message); }
       });
       const remove = row.querySelector('.source-remove');
@@ -479,6 +480,16 @@
     notify('ひとつ前の状態に戻しました。');
   }
 
+  function clearSources() {
+    if (importing || !state.lanes.length) return;
+    remember();
+    state.lanes = [];
+    getEvents();
+    updateView();
+    renderAudio();
+    notify('素材をすべて削除しました。↶で元に戻せます。');
+  }
+
   async function addFiles(fileList) {
     if (importing || !fileList.length) return;
     importing = true;
@@ -655,6 +666,7 @@
   $('undo-button').addEventListener('click', undo);
   $('export-button').addEventListener('click', exportWav);
   $('demo-button').addEventListener('click', () => addDemos());
+  $('clear-sources-button').addEventListener('click', clearSources);
   $('help-button').addEventListener('click', () => $('help-dialog').showModal());
   $('close-help').addEventListener('click', () => $('help-dialog').close());
   $('help-dialog').addEventListener('click', (event) => { if (event.target === $('help-dialog')) $('help-dialog').close(); });

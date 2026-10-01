@@ -427,7 +427,9 @@
 
     async playPreview(buffer) {
       if (!isBuffer(buffer)) return;
+      var request = ++this._playRequest;
       var context = await this.init();
+      if (request !== this._playRequest) return;
       this._stopPreview();
       var source = context.createBufferSource();
       var gain = context.createGain();
