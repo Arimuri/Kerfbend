@@ -370,6 +370,50 @@
       assert(JSON.stringify(fixture.event) === beforeEvent, 'Envelope changed source event metadata');
       assert(fixture.lane.buffer.getChannelData(0).every(function (sample, index) { return sample === beforePCM[index]; }), 'Envelope changed the original source PCM');
     });
+    await test('GLITCH rewrites the non-drum mix and leaves drums untouched', async function () {
+      assert(global.BlueLoopGlitch, 'Load glitch.js to verify the renderer integration');
+      function source(shape) {
+        var buffer = engine.context.createBuffer(1, 4 * 44100, 44100);
+        var data = buffer.getChannelData(0);
+        for (var frame = 0; frame < data.length; frame++) data[frame] = shape(frame);
+        return buffer;
+      }
+      var melody = { id: 'keys', category: 'other', buffer: source(function (frame) { return Math.sin(frame / 23) * 0.2; }), volume: 1 };
+      var drums = { id: 'kit', category: 'drums', buffer: source(function (frame) { return Math.sin(frame / 7) * Math.exp(-(frame % 5512) / 900) * 0.2; }), volume: 1 };
+      var events = [
+        { laneId: 'keys', step: 0, sliceIndex: 0, durationSteps: 32, velocity: 1 },
+        { laneId: 'kit', step: 0, sliceIndex: 0, durationSteps: 32, velocity: 1 }
+      ];
+      var dry = { bpm: 120, bars: 2, chop: 1, phraseSeed: 'GLITCH' };
+      var wet = Object.assign({ glitchAmount: 100, glitchSize: 50 }, dry);
+      var regions = global.BlueLoopGlitch.plan(wet, 'GLITCH').regions;
+      assert(regions.length > 2, 'The test plan has no edits');
+      var drumsDry = await engine.render([drums], dry, [events[1]]);
+      var drumsWet = await engine.render([drums], wet, [events[1]]);
+      assert(maximumDifference(drumsDry, drumsWet) === 0, 'GLITCH changed a drum lane');
+      var melodyDry = await engine.render([melody], dry, [events[0]]);
+      var melodyWet = await engine.render([melody], wet, [events[0]]);
+      var inside = new Uint8Array(melodyDry.length);
+      regions.forEach(function (region) {
+        var from = Math.round(region.step * 0.125 * 44100);
+        var to = Math.min(inside.length, Math.round((region.step + region.steps) * 0.125 * 44100) + 70);
+        for (var frame = from; frame < to; frame++) inside[frame] = 1;
+      });
+      var outsideSame = true;
+      var insideDiffer = 0;
+      for (var frame = 0; frame < inside.length; frame++) {
+        var difference = Math.abs(melodyDry.getChannelData(0)[frame] - melodyWet.getChannelData(0)[frame]);
+        if (!inside[frame] && difference > 0) outsideSame = false;
+        if (inside[frame] && difference > 1e-3) insideDiffer += 1;
+      }
+      assert(outsideSame && insideDiffer > 1000, 'GLITCH must change the non-drum mix only inside its regions');
+      var both = await engine.render([melody, drums], wet, events);
+      var mixed = 0;
+      for (var sample = 0; sample < both.length; sample += 3) {
+        mixed = Math.max(mixed, Math.abs(both.getChannelData(0)[sample] - drumsWet.getChannelData(0)[sample] - melodyWet.getChannelData(0)[sample]));
+      }
+      assert(mixed < 1e-5, 'The full mix must equal the untouched drums plus the glitched parts: ' + mixed);
+    });
     await test('Pure-tone lanes release cut notes over their release time', async function () {
       var buffer = engine.context.createBuffer(1, 44100, 44100);
       buffer.getChannelData(0).fill(0.5);

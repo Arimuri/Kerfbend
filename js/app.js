@@ -10,7 +10,7 @@
   const MAX_TOTAL_SECONDS = 240;
   const colors = ['#a7d1ff', '#d6bfff', '#e7e68c', '#ffb99f', '#9dd8c8', '#efb8d3', '#b7c6f5', '#ddc5a1'];
   const MAX_HISTORY = 30;
-  const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, pitchEnvSeed: '', keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
+  const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, pitchEnvSeed: '', glitchAmount: 0, glitchSize: 50, glitchCrush: 0, glitchSeed: '', keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
   const envelopeChances = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
   const roleLabels = { lead: '主役', bass: 'ベース', fill: '合いの手', drums: 'ドラム' };
   const progressionLabels = { I: '同じコード（I）', 'I-IV': '2コード往復（I–IV）', 'I-V': '2コード往復（I–V）', 'vi-IV': '2コード往復（vi–IV）', 'IV-V-iii-vi': '王道進行（IV–V–iii–vi）', 'vi-IV-V-I': '小室進行（vi–IV–V–I）' };
@@ -109,7 +109,9 @@
     $('max-drum-voices').disabled = importing;
     ['pitch-env-depth', 'pitch-env-time', 'pitch-env-depth-random', 'pitch-env-time-random'].forEach((id) => { $(id).disabled = importing; });
     $('pitch-env-reroll').disabled = importing || !state.settings.pitchEnvDepth;
-    document.querySelectorAll('.source-key, .source-category, .source-role, .pitch-envelope-lane select').forEach((select) => { select.disabled = importing; });
+    ['glitch-amount', 'glitch-size', 'glitch-crush'].forEach((id) => { $(id).disabled = importing; });
+    $('glitch-reroll').disabled = importing || !state.settings.glitchAmount;
+    document.querySelectorAll('.source-key, .source-category, .source-role, .pitch-envelope-lane select, .lane-env-chance').forEach((select) => { select.disabled = importing; });
     document.body.classList.toggle('busy', rendering || importing);
     document.body.classList.toggle('playing', playing);
     $('play-button').classList.toggle('is-playing', playing);
@@ -131,7 +133,8 @@
     updateKeyPlan();
     const version = ++renderVersion;
     const lanes = state.lanes.map((lane) => ({ ...lane }));
-    const settings = { ...state.settings };
+    // GLITCH positions follow the phrase SEED as well as their own re-roll seed.
+    const settings = { ...state.settings, phraseSeed: state.seed };
     const events = state.events.map((event) => ({ ...event }));
     if (!lanes.length) {
       stop();
@@ -186,6 +189,10 @@
     $('pitch-env-depth-random').value = state.settings.pitchEnvDepthRandom;
     $('pitch-env-time-random').value = state.settings.pitchEnvTimeRandom;
     showPitchEnvelope();
+    $('glitch-amount').value = state.settings.glitchAmount;
+    $('glitch-size').value = state.settings.glitchSize;
+    $('glitch-crush').value = state.settings.glitchCrush;
+    showGlitch();
     $('duration').textContent = `${generator.duration(state.settings).toFixed(2)} SEC / LOOP`;
     $('key-sync').checked = state.settings.keySync;
     $('target-key').value = state.settings.targetKey === 'auto' ? 'auto' : `${keyPlan.target.tonic}:major`;
@@ -221,6 +228,17 @@
     $('pitch-env-depth-random-hint').textContent = !depthSpread || !depth ? '0%で全断片が同じ幅' : `断片ごとに ±${Math.min(lowest, depth)}〜${depth} st`;
     $('pitch-env-time-random-hint').textContent = !timeSpread ? '0%で全断片が同じ時間' : `断片ごとに ${shortest}〜${longest} ms（断片内に戻る）`;
     document.querySelector('.pitch-envelope-panel').classList.toggle('is-bypassed', !depth);
+    document.body.classList.toggle('pitch-env-off', !depth);
+  }
+
+  function showGlitch() {
+    const amount = Number($('glitch-amount').value);
+    const size = Number($('glitch-size').value);
+    $('glitch-amount-output').textContent = amount ? `${amount}%` : 'OFF';
+    $('glitch-size-output').textContent = size < 25 ? '1/16' : size < 50 ? '1/16–1/32' : size === 50 ? '1/32' : size < 100 ? '1/32–1/64' : '1/64';
+    $('glitch-crush-output').textContent = `${$('glitch-crush').value}%`;
+    ['glitch-amount', 'glitch-size', 'glitch-crush'].forEach((id) => rangeFill($(id)));
+    document.querySelector('.glitch-panel').classList.toggle('is-bypassed', !amount);
   }
 
   function pitchEnvelopeLanes() {
@@ -257,37 +275,10 @@
       renderAudio();
     });
     list.append(all);
-    categories.groups.flatMap((category) => state.lanes.filter((lane) => categories.get(lane) === category.id)).forEach((lane) => {
-      const item = document.createElement('label');
-      item.className = 'pitch-envelope-lane';
-      item.dataset.laneId = lane.id;
-      item.style.setProperty('--lane-color', lane.color);
-      item.innerHTML = '<i aria-hidden="true"></i><span></span><select></select>';
-      item.querySelector('span').textContent = lane.name;
-      item.title = `${lane.name}：PITCH ENVがかかる断片の割合`;
-      const select = item.querySelector('select');
-      envelopeChances.forEach((chance) => {
-        const option = document.createElement('option');
-        option.value = String(chance);
-        option.textContent = chance ? `${chance}%` : 'OFF';
-        select.append(option);
-      });
-      const current = laneEnvelopeChance(lane);
-      select.value = String(current);
-      select.disabled = importing;
-      select.setAttribute('aria-label', `${lane.name} のPITCH ENV発生確率`);
-      item.classList.toggle('is-off', current === 0);
-      select.addEventListener('change', () => {
-        if (importing) { select.value = String(laneEnvelopeChance(lane)); return; }
-        const value = Number(select.value);
-        if (!envelopeChances.includes(value) || value === laneEnvelopeChance(lane)) return;
-        remember();
-        lane.pitchEnvChance = value;
-        updateView();
-        renderAudio();
-      });
-      list.append(item);
-    });
+    const note = document.createElement('span');
+    note.className = 'pitch-envelope-lanes-empty';
+    note.textContent = 'パートごとは各トラック脇の ENV スライダーで調整します';
+    list.append(note);
   }
 
   function laneEnvelopeChance(lane) {
@@ -471,7 +462,7 @@
       row.classList.toggle('is-muted', lane.muted || (anySolo && !lane.solo));
       row.dataset.laneId = lane.id;
       row.dataset.category = category;
-      row.innerHTML = '<div class="lane-info"><div class="lane-title"><span class="lane-number"></span><span class="lane-name"></span><span class="lane-role"></span></div><div class="lane-buttons"><button class="lane-button lock-button" type="button">LOCK</button><button class="lane-button mute-button" type="button">M</button><button class="lane-button solo-button" type="button">S</button><input class="lane-volume" type="range" min="0" max="100"></div></div><div class="lane-track"><canvas></canvas><div class="playhead"></div></div>';
+      row.innerHTML = '<div class="lane-info"><div class="lane-title"><span class="lane-number"></span><span class="lane-name"></span><span class="lane-role"></span></div><div class="lane-buttons"><button class="lane-button lock-button" type="button">LOCK</button><button class="lane-button mute-button" type="button">M</button><button class="lane-button solo-button" type="button">S</button><input class="lane-volume" type="range" min="0" max="100"></div><label class="lane-env"><span>ENV</span><input class="lane-env-chance" type="range" min="0" max="100" step="10"><output></output></label></div><div class="lane-track"><canvas></canvas><div class="playhead"></div></div>';
       row.querySelector('.lane-number').textContent = String(index + 1).padStart(2, '0');
       row.querySelector('.lane-name').textContent = lane.name;
       const role = playedRole(lane, parts);
@@ -498,6 +489,32 @@
           updateButtons();
           if (action !== 'lock') renderAudio();
         });
+      });
+      // PITCH ENV chance sits beside each track; changing it re-renders only.
+      const chance = row.querySelector('.lane-env-chance');
+      const chanceOutput = row.querySelector('.lane-env output');
+      const showChance = () => {
+        const value = Number(chance.value);
+        chanceOutput.textContent = value ? `${value}%` : 'OFF';
+        row.querySelector('.lane-env').classList.toggle('is-off', value === 0);
+        rangeFill(chance);
+      };
+      chance.value = laneEnvelopeChance(lane);
+      chance.disabled = importing;
+      chance.setAttribute('aria-label', `${lane.name} のPITCH ENV発生確率`);
+      chance.title = 'PITCH ENVがかかる断片の割合';
+      showChance();
+      chance.addEventListener('input', showChance);
+      chance.addEventListener('change', () => {
+        const value = Number(chance.value);
+        if (importing || !Number.isFinite(value)) { chance.value = laneEnvelopeChance(lane); showChance(); return; }
+        if (value === laneEnvelopeChance(lane)) return;
+        remember();
+        lane.pitchEnvChance = Math.max(0, Math.min(100, value));
+        pitchEnvelopeLanes();
+        drawTracks();
+        updateButtons();
+        renderAudio();
       });
       const volume = row.querySelector('.lane-volume');
       volume.value = lane.volume * 100;
@@ -530,6 +547,7 @@
 
   function drawTracks() {
     const audible = playbackEvents();
+    const glitchRegions = window.BlueLoopGlitch.plan(state.settings, state.seed).regions;
     const lanes = new Map(state.lanes.map((lane) => [lane.id, lane]));
     document.querySelectorAll('.lane-row').forEach((row) => {
       const lane = lanes.get(row.dataset.laneId);
@@ -557,6 +575,27 @@
         context.moveTo(Math.round(step * unit) + 0.5, 0);
         context.lineTo(Math.round(step * unit) + 0.5, height);
         context.stroke();
+      }
+      // Hatching marks where GLITCH rewrites the non-drum mix.
+      if (!window.BlueLoopAudio.isDrumLane(lane)) {
+        context.fillStyle = 'rgba(36, 76, 229, 0.08)';
+        context.strokeStyle = 'rgba(36, 76, 229, 0.28)';
+        glitchRegions.forEach((region) => {
+          const left = region.step * unit;
+          const right = (region.step + region.steps) * unit;
+          context.fillRect(left, 0, right - left, height);
+          context.save();
+          context.beginPath();
+          context.rect(left, 0, right - left, height);
+          context.clip();
+          context.beginPath();
+          for (let line = left - height; line < right; line += 6) {
+            context.moveTo(line, height);
+            context.lineTo(line + height, 0);
+          }
+          context.stroke();
+          context.restore();
+        });
       }
       const data = lane.buffer.getChannelData(0);
       const peak = sourcePeak(lane.buffer);
@@ -971,6 +1010,28 @@
       updateView();
       renderAudio();
     });
+  });
+  [['glitch-amount', 'glitchAmount'], ['glitch-size', 'glitchSize'], ['glitch-crush', 'glitchCrush']].forEach(([id, key]) => {
+    $(id).addEventListener('input', showGlitch);
+    $(id).addEventListener('change', () => {
+      if (importing) { syncSettings(); return; }
+      const value = Number($(id).value);
+      if (!Number.isFinite(value) || value === state.settings[key]) return;
+      remember();
+      state.settings[key] = value;
+      updateView();
+      renderAudio();
+    });
+  });
+  $('glitch-reroll').addEventListener('click', () => {
+    if (importing || !state.settings.glitchAmount) return;
+    remember();
+    const value = new Uint32Array(1);
+    window.crypto.getRandomValues(value);
+    state.settings.glitchSeed = value[0].toString(36);
+    updateView();
+    renderAudio();
+    notify('グリッチの位置と種類を選び直しました。フレーズはそのままです。');
   });
   $('pitch-env-reroll').addEventListener('click', () => {
     if (importing || !state.settings.pitchEnvDepth) return;

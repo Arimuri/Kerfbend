@@ -19,6 +19,12 @@
     return 440 * Math.pow(2, (note - 69) / 12);
   }
 
+  // Same rule as the voice-limit plan: a lane is a drum lane by category,
+  // or by its demo kind when no category is set.
+  function isDrumLane(lane) {
+    return !!lane && (lane.category === 'drums' || (lane.category !== 'other' && lane.kind === 'drums'));
+  }
+
   function pitchSemitones(lane, event) {
     return clamp(number(event && event.semitones, 0) + number(lane && lane.keyShift, 0), -36, 36);
   }
@@ -345,7 +351,6 @@
         events = global.BlueLoopPlayback.plan(lanes, settings, events);
       }
       var scheduled = [];
-      var latestEnd = duration;
       events.forEach(function (event) {
         var lane = laneMap.get(event.laneId);
         var playback = eventPlayback(lane, event, settings);
@@ -354,8 +359,41 @@
           lane: lane, event: event,
           gain: clamp(number(lane.volume, 0.7), 0, 1.5) * clamp(number(event.velocity, 0.8), 0, 1)
         }));
-        latestEnd = Math.max(latestEnd, playback.start + playback.duration);
       });
+      var glitch = global.BlueLoopGlitch ? global.BlueLoopGlitch.plan(settings, settings.phraseSeed) : null;
+      var output;
+      if (glitch && glitch.regions.length) {
+        // GLITCH edits every non-drum part as one mix; drums pass through.
+        output = await this._mix(scheduled.filter(function (item) { return isDrumLane(item.lane); }), duration, frameCount, stepSeconds, space);
+        var edited = await this._mix(scheduled.filter(function (item) { return !isDrumLane(item.lane); }), duration, frameCount, stepSeconds, space);
+        var parts = [edited.getChannelData(0), edited.getChannelData(1)];
+        global.BlueLoopGlitch.apply(parts, SAMPLE_RATE, stepSeconds, glitch);
+        for (var part = 0; part < 2; part++) {
+          var mixed = output.getChannelData(part);
+          for (var index = 0; index < mixed.length; index++) mixed[index] += parts[part][index];
+        }
+      } else {
+        output = await this._mix(scheduled, duration, frameCount, stepSeconds, space);
+      }
+      var peak = 0;
+      for (var channel = 0; channel < 2; channel++) {
+        var data = output.getChannelData(channel);
+        for (var sample = 0; sample < data.length; sample++) peak = Math.max(peak, Math.abs(data[sample]));
+      }
+      if (peak > 0.95) {
+        var scale = 0.95 / peak;
+        for (var outputChannel = 0; outputChannel < 2; outputChannel++) {
+          var pcm = output.getChannelData(outputChannel);
+          for (var pcmFrame = 0; pcmFrame < pcm.length; pcmFrame++) pcm[pcmFrame] *= scale;
+        }
+      }
+      return output;
+    }
+
+    // Renders scheduled slices into one loop-length stereo buffer, folding
+    // tails into the loop's beginning. Peak limiting happens in render().
+    async _mix(scheduled, duration, frameCount, stepSeconds, space) {
+      var latestEnd = scheduled.reduce(function (end, item) { return Math.max(end, item.start + item.duration); }, duration);
       var echoDelay = stepSeconds * 3;
       var tailSeconds = space ? echoDelay * 3 + 0.04 : 0;
       var OfflineContext = getContextConstructor(true);
@@ -422,20 +460,11 @@
       if (eventSum) eventSum.connect(bus);
       var rendered = await offline.startRendering();
       var output = makeBuffer(offline, 2, frameCount, SAMPLE_RATE);
-      var peak = 0;
       // Fold tails into the loop's beginning, preserving the exact musical length.
       for (var channel = 0; channel < 2; channel++) {
         var input = rendered.getChannelData(channel);
         var target = output.getChannelData(channel);
         for (var frame = 0; frame < input.length; frame++) target[frame % frameCount] += input[frame];
-        for (var sample = 0; sample < target.length; sample++) peak = Math.max(peak, Math.abs(target[sample]));
-      }
-      if (peak > 0.95) {
-        var scale = 0.95 / peak;
-        for (var outputChannel = 0; outputChannel < 2; outputChannel++) {
-          var pcm = output.getChannelData(outputChannel);
-          for (var pcmFrame = 0; pcmFrame < pcm.length; pcmFrame++) pcm[pcmFrame] *= scale;
-        }
       }
       return output;
     }
@@ -545,7 +574,7 @@
   }
 
   global.BlueLoopAudio = {
-    Engine: Engine, encodeWav: encodeWav, pitchSemitones: pitchSemitones,
+    Engine: Engine, encodeWav: encodeWav, pitchSemitones: pitchSemitones, isDrumLane: isDrumLane,
     eventPlayback: eventPlayback, SAMPLE_RATE: SAMPLE_RATE
   };
 })(window);

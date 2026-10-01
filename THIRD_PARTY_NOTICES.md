@@ -10,7 +10,7 @@ Kerfbend に含めている第三者の実装・数値表と、設計を参考�
 | --- | --- | --- |
 | fft.js 4.0.4 / Fedor Indutny | `vendor/fft.js/fft.js`。音声キー解析の FFT 実装全体と、ブラウザ用の接続部分 | MIT。著作権・許諾・免責の全文をソース先頭と [LICENSE](vendor/fft.js/LICENSE) に保存 |
 | Partitura v1.2.1 掲載の Krumhansl–Kessler profiles | `js/key-analysis.js` の `PROFILES`。major/minor 各12個、計24個の数値のみ | 取得元の Apache-2.0 を [ライセンス原文](licenses/partitura-Apache-2.0.txt) と本書に記録 |
-| Mulberry32 | `js/generator.js`・`js/fm-synth.js` の `randomFor`、`js/audio-engine.js` の `randomSource`、`js/pitch-envelope.js` の `unit` にある乱数更新部分 | Tommy Ettinger の原実装は CC0。下記 bryc の JavaScript 実装は Public domain と明記 |
+| Mulberry32 | `js/generator.js`・`js/fm-synth.js` の `randomFor`、`js/audio-engine.js` の `randomSource`、`js/pitch-envelope.js` の `unit`、`js/glitch.js` の `randomFor` にある乱数更新部分 | Tommy Ettinger の原実装は CC0。下記 bryc の JavaScript 実装は Public domain と明記 |
 
 ### fft.js
 
