@@ -8,7 +8,7 @@ Kerfbend に含めている第三者の実装・数値表と、設計を参考�
 
 | 項目 | Kerfbend での使用箇所・範囲 | ライセンス・表示 |
 | --- | --- | --- |
-| fft.js 4.0.4 / Fedor Indutny | `vendor/fft.js/fft.js`。音声キー解析の FFT 実装全体と、ブラウザ用の接続部分 | MIT。著作権・許諾・免責の全文をソース先頭と [LICENSE](vendor/fft.js/LICENSE) に保存 |
+| fft.js 4.0.4 / Fedor Indutny | `vendor/fft.js/fft.js`。音声キー解析と音の頭の検出に使う FFT 実装全体と、ブラウザ用の接続部分 | MIT。著作権・許諾・免責の全文をソース先頭と [LICENSE](vendor/fft.js/LICENSE) に保存 |
 | Partitura v1.2.1 掲載の Krumhansl–Kessler profiles | `js/key-analysis.js` の `PROFILES`。major/minor 各12個、計24個の数値のみ | 取得元の Apache-2.0 を [ライセンス原文](licenses/partitura-Apache-2.0.txt) と本書に記録 |
 | Mulberry32 | `js/generator.js`・`js/fm-synth.js` の `randomFor`、`js/audio-engine.js` の `randomSource`、`js/pitch-envelope.js` の `unit`、`js/glitch.js` の `randomFor` にある乱数更新部分 | Tommy Ettinger の原実装は CC0。下記 bryc の JavaScript 実装は Public domain と明記 |
 
@@ -55,6 +55,13 @@ Kerfbend の乱数更新部分は、これらの公開実装と同じ Mulberry32
 ### Essentia のアルゴリズム説明
 
 [HPCP](https://essentia.upf.edu/reference/std_HPCP.html) と [Key](https://essentia.upf.edu/reference/std_Key.html) の説明を、スペクトルのピークから音高クラス分布を求め、キーのプロファイルと照合する方式の参考にしています。Essentia のライブラリ、WASM、C++ 実装は同梱・読み込みしていません。
+
+### 音の頭の検出の論文
+
+`js/onset-detection.js` は、次の論文に書かれた方式を参考に Kerfbend 用に実装しています。論文の著者らのソフトウェアやコードは同梱・読み込みしていません。
+
+- S. Böck and G. Widmer, "Maximum Filter Vibrato Suppression for Onset Detection", Proceedings of the 16th International Conference on Digital Audio Effects (DAFx-13), 2013。対数圧縮したスペクトルの増加分を、周波数方向に最大値フィルタをかけた前のフレームと比べる方式。
+- J. P. Bello, L. Daudet, S. Abdallah, C. Duxbury, M. Davies and M. B. Sandler, "A Tutorial on Onset Detection in Music Signals", IEEE Transactions on Speech and Audio Processing, 13(5), 2005。局所最大と移動平均によるピークの選び方。
 
 ## 配布に含める表示
 

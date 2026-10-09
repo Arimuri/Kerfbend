@@ -231,8 +231,28 @@
     }).concat(ending.events.length ? ending.events : ending.first ? [ending.first] : []);
   }
 
+  // Sources chopped at their onsets carry the analysis from BlueLoopOnsets.
+  // SIZE sets how clear an onset must be to start a cut, so larger sizes
+  // leave fewer, longer pieces. Without an analysis the source is sliced evenly.
+  function onsetCuts(lane, settings) {
+    const onsets = root.BlueLoopOnsets;
+    const duration = Number(lane.onsets && lane.onsets.duration);
+    if (lane.playMode !== 'onset' || !onsets || !(duration > 0)) return null;
+    const cuts = onsets.cuts(lane.onsets, 100 - settings.size);
+    return cuts.length ? { duration, cuts } : null;
+  }
+
+  // Equal slices divide the source evenly; an onset cut runs to the next onset.
+  function sliceAt(context, slice) {
+    if (!context.onsets) return { sliceIndex: slice, startRatio: slice / context.chop, sourceChop: context.chop };
+    const cut = context.onsets.cuts[slice];
+    return {
+      sliceIndex: slice, startRatio: cut.start / context.onsets.duration,
+      lengthRatio: (cut.end - cut.start) / context.onsets.duration, sourceChop: context.chop,
+    };
+  }
+
   function sliceUnit(context, rhythm, from, slice, force, downbeat) {
-    const settings = context.settings;
     const random = context.random;
     const events = [];
     let first = null;
@@ -241,19 +261,14 @@
       // Beat one and beat three supply an anchor; the other cuts leave more room.
       const anchor = position === 0 || position === 8;
       const keep = random() < Math.min(1, context.density * (anchor ? 1.25 : 0.92) * (position === 0 && downbeat ? downbeat : 1));
-      if (random() < context.style.jump) slice = Math.floor(random() * settings.chop);
-      else slice = (slice + (random() < context.style.stay ? 0 : 1)) % settings.chop;
-      const event = {
-        laneId: context.lane.id,
-        step: position,
-        sliceIndex: slice,
-        startRatio: slice / settings.chop,
-        sourceChop: settings.chop,
+      if (random() < context.style.jump) slice = Math.floor(random() * context.chop);
+      else slice = (slice + (random() < context.style.stay ? 0 : 1)) % context.chop;
+      const event = Object.assign({ laneId: context.lane.id, step: position }, sliceAt(context, slice), {
         durationSteps: context.minimumLength + Math.floor(random() * (context.maximumLength - context.minimumLength + 1)) + context.style.sustain,
         semitones: lift(octave(random, context.octave), context.style, position),
         reverse: random() < context.motion * 0.19 * context.style.reverse,
         velocity: Number((0.65 + random() * 0.27 + (anchor ? 0.06 : 0)).toFixed(3)),
-      };
+      });
       if (!first) first = event;
       if (keep || position === force) events.push(event);
     });
@@ -262,7 +277,7 @@
 
   function sliceUnits(context) {
     const random = context.random;
-    const chop = context.settings.chop;
+    const chop = context.chop;
     const cells = context.style.rhythms;
     const force = context.style.force ? 0 : null;
     const rhythmA = Math.floor(random() * cells.length);
@@ -270,7 +285,7 @@
     const start = context.style.top ? 0 : drawn;
     const a = sliceUnit(context, cells[rhythmA], 0, start, force);
     // Drums open each phrase on the top of their source, usually the downbeat hit.
-    if (context.style.top) a.events = a.events.map(function (event) { return event.step === 0 ? Object.assign({}, event, { sliceIndex: 0, startRatio: 0 }) : event; });
+    if (context.style.top) a.events = a.events.map(function (event) { return event.step === 0 ? Object.assign({}, event, sliceAt(context, 0)) : event; });
     const answer = sliceUnit(context, cells[otherRhythm(random, rhythmA, cells.length)], ENDING, a.slice, null);
     // B takes another rhythm from the other half of the source.
     const rhythmB = otherRhythm(random, rhythmA, cells.length);
@@ -541,10 +556,11 @@
     if (lane.playMode === 'loop') return wholeLoop(lane, settings);
 
     const plan = segmentPlan(lane);
+    const onsets = plan ? null : onsetCuts(lane, settings);
     const role = part && roleStyles[part.role] ? part.role : 'lead';
     const style = roleStyles[role];
     const context = {
-      lane, settings, plan, style, random: randomFor(seed, lane.id),
+      lane, settings, plan, onsets, chop: onsets ? onsets.cuts.length : settings.chop, style, random: randomFor(seed, lane.id),
       motion: settings.motion / 100, octave: settings.octave / 100, density: Math.min(1, settings.density / 100 * style.density),
       minimumLength: 1 + Math.floor(settings.size / 50), maximumLength: 1 + Math.round(settings.size * 0.03),
       stepSeconds: 60 / settings.bpm / 4, group: noteGroup(settings.size),

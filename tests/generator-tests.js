@@ -517,6 +517,52 @@
     assert(generator.generate([loopLane], Object.assign({}, settings, { density: 0 }), 'LOOP').length === 0, 'Density zero silences whole loops too');
     const lockedLoop = Object.assign({}, loopLane, { locked: true, events: generator.generate([loopLane], settings, 'LOOP-LOCK') });
     assert(JSON.stringify(generator.generate([lockedLoop], Object.assign({}, settings, { breaks: 90 }), 'OTHER')) === JSON.stringify(lockedLoop.events), 'A locked whole loop keeps its events');
+
+    // Onset cuts. The analysis is plain data from BlueLoopOnsets.analyze;
+    // a hand-made one keeps these tests free of audio.
+    const onsets = root.BlueLoopOnsets;
+    assert(onsets, 'Load js/onset-detection.js before generator-tests.js');
+    const analysis = { duration: 4, start: 0.01, candidates: [0.5, 0.75, 1, 1.5, 2, 2.25, 2.5, 3, 3.5].map(function (time, index) {
+      return { time, strength: [2, 0.3, 1, 0.5, 2, 0.2, 1, 0.6, 1.4][index] };
+    }) };
+    const onsetLane = { id: 'cut', events: [], playMode: 'onset', onsets: analysis };
+    let pieces = Infinity;
+    [0, 25, 50, 75, 100].forEach(function (size) {
+      const cuts = onsets.cuts(analysis, 100 - size);
+      assert(cuts.length <= pieces && cuts.length >= 1, 'A larger size keeps fewer onset cuts: size ' + size);
+      pieces = cuts.length;
+      [1, 2, 4, 8].forEach(function (bars) {
+        [0, 30].forEach(function (breaks) {
+          const onsetSettings = Object.assign({}, settings, { bars, size, breaks, density: 100, motion: 100 });
+          const events = generator.generate([onsetLane], onsetSettings, 'ONSET-' + size);
+          assert(events.length > 0 && events.every(function (event) {
+            const cut = cuts[event.sliceIndex];
+            return Number.isInteger(event.step) && event.step >= 0 && event.step + event.durationSteps <= bars * 16 &&
+              Number.isInteger(event.durationSteps) && event.durationSteps >= 1 && event.sourceChop === cuts.length && !!cut &&
+              event.startRatio === cut.start / analysis.duration && event.lengthRatio === (cut.end - cut.start) / analysis.duration;
+          }), 'Onset events, fills included, play whole onset cuts: size ' + size + ' / ' + bars + ' bars / breaks ' + breaks);
+          assert(JSON.stringify(events) === JSON.stringify(generator.generate([onsetLane], Object.assign({}, onsetSettings, { bpm: 77, swing: 30, pitchEnvDepth: 12, maxVoices: 1 }), 'ONSET-' + size)),
+            'Tempo, swing and playback settings never change onset cuts: size ' + size + ' / ' + bars + ' bars / breaks ' + breaks);
+        });
+      });
+    });
+    assert(pieces < onsets.cuts(analysis, 100).length, 'Size changes how many onsets cut the source');
+    const evenly = generator.generate([{ id: 'cut', events: [], playMode: 'chop' }], settings, 'ONSET-FALLBACK');
+    assert(JSON.stringify(generator.generate([{ id: 'cut', events: [], playMode: 'onset' }], settings, 'ONSET-FALLBACK')) === JSON.stringify(evenly),
+      'An onset lane without an analysis is sliced evenly');
+    assert(JSON.stringify(generator.generate([{ id: 'cut', events: [], playMode: 'onset', onsets: { duration: 4, start: null, candidates: [] } }], settings, 'ONSET-FALLBACK')) === JSON.stringify(evenly),
+      'A silent onset analysis falls back to even slices');
+    assert(JSON.stringify(generator.generate([{ id: 'cut', events: [], playMode: 'chop', onsets: analysis }], settings, 'ONSET-FALLBACK')) === JSON.stringify(evenly),
+      'An analysis is ignored unless the lane chops at onsets');
+    const onsetDrums = Object.assign({}, onsetLane, { id: 'beat', category: 'drums' });
+    const drumEvents = generator.generate([onsetDrums], Object.assign({}, settings, { bars: 8, density: 100 }), 'ONSET-DRUMS');
+    const firstCut = onsets.cuts(analysis, 100 - settings.size)[0];
+    assert(drumEvents.filter(function (event) { return event.step % 64 === 0; }).every(function (event) {
+      return event.sliceIndex === 0 && event.startRatio === firstCut.start / analysis.duration && event.lengthRatio === (firstCut.end - firstCut.start) / analysis.duration;
+    }) && drumEvents.some(function (event) { return event.step === 0; }), 'Onset drums open each phrase on the first sound of the source');
+    const lockedOnsets = Object.assign({}, onsetLane, { locked: true, events: generator.generate([onsetLane], settings, 'ONSET-LOCK') });
+    assert(JSON.stringify(generator.generate([Object.assign({}, lockedOnsets, { onsets: null })], Object.assign({}, settings, { size: 0 }), 'OTHER')) === JSON.stringify(lockedOnsets.events),
+      'A locked onset lane keeps its cuts when the size or analysis changes');
     return { passed: assertions.length, assertions };
   };
 })(typeof window !== 'undefined' ? window : globalThis);

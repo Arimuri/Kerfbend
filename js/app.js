@@ -27,6 +27,7 @@
   let uploadNumber = 0;
   let lastPosition = '';
   let analysisLabel = '';
+  let busyLabel = '';
   let keyPlan = harmony.plan([], state.settings);
   let fmNumber = 0;
   let fmDraft = null;
@@ -104,6 +105,37 @@
     getEvents();
   }
 
+  function playMode(lane) {
+    return Array.isArray(lane.segments) && lane.playMode === 'onset' ? 'chop'
+      : ['onset', 'loop'].includes(lane.playMode) ? lane.playMode : 'chop';
+  }
+
+  // Pieces the onset cut leaves at the current size.
+  function onsetPieces(lane) {
+    return lane.onsets ? window.BlueLoopOnsets.cuts(lane.onsets, 100 - state.settings.size).length : 0;
+  }
+
+  // Onsets are found once per source; the analysis is plain data kept with
+  // the lane, so undo and new phrases reuse it.
+  async function findOnsets(lane) {
+    if (lane.onsets) return true;
+    importing = true;
+    busyLabel = 'FINDING ONSETS…';
+    updateButtons();
+    notify(`音の頭を検出中：${lane.name}`, 15000);
+    try {
+      lane.onsets = await window.BlueLoopOnsets.analyze(lane.buffer);
+      return true;
+    } catch (error) {
+      notify(`${lane.name}の音の頭を検出できませんでした。${error.message || ''}`, 9000);
+      return false;
+    } finally {
+      importing = false;
+      busyLabel = '';
+      updateButtons();
+    }
+  }
+
   function playedRole(lane, parts) {
     return lane.playedRole || parts[lane.id];
   }
@@ -132,7 +164,7 @@
     $('play-button').classList.toggle('is-playing', playing);
     $('play-label').textContent = playing ? '停止' : '再生';
     $('play-icon').textContent = playing ? '■' : '▶';
-    $('live-label').textContent = importing ? (analysisLabel ? 'ANALYZING KEY…' : 'LOADING SOUNDS…') : rendering ? 'BUILDING PHRASE…' : playing ? 'LOOP IS PLAYING' : empty ? 'ADD A SOUND' : 'READY TO PLAY';
+    $('live-label').textContent = importing ? (busyLabel || (analysisLabel ? 'ANALYZING KEY…' : 'LOADING SOUNDS…')) : rendering ? 'BUILDING PHRASE…' : playing ? 'LOOP IS PLAYING' : empty ? 'ADD A SOUND' : 'READY TO PLAY';
     $('live-label').title = analysisLabel;
     $('live-label').classList.toggle('playing', playing);
     $('undo-button').title = `元に戻す (⌘/Ctrl + Z) — ${history.length}`;
@@ -334,7 +366,7 @@
       row.dataset.laneId = lane.id;
       row.dataset.category = categories.get(lane);
       row.style.setProperty('--lane-color', lane.color);
-      row.innerHTML = '<i class="source-color"></i><div><span class="source-title"></span><span class="source-detail"></span></div><button class="source-preview" type="button">▶</button><button class="source-remove" type="button">×</button><div class="source-controls"><label class="source-category-control">分類 <select class="source-category"><option value="other">その他</option><option value="drums">ドラム</option></select></label><label class="source-role-control">役割 <select class="source-role"></select></label><label class="source-mode-control">使い方 <select class="source-mode"><option value="chop">刻む</option><option value="loop">ループのまま</option></select></label><label class="source-bars-control">長さ <select class="source-bars"></select></label></div><div class="source-tuning"><select class="source-key"></select><span class="key-shift"></span></div><span class="source-major-note"></span>';
+      row.innerHTML = '<i class="source-color"></i><div><span class="source-title"></span><span class="source-detail"></span></div><button class="source-preview" type="button">▶</button><button class="source-remove" type="button">×</button><div class="source-controls"><label class="source-category-control">分類 <select class="source-category"><option value="other">その他</option><option value="drums">ドラム</option></select></label><label class="source-role-control">役割 <select class="source-role"></select></label><label class="source-mode-control">使い方 <select class="source-mode"><option value="chop">刻む</option><option value="onset">音の頭で刻む</option><option value="loop">ループのまま</option></select></label><label class="source-bars-control">長さ <select class="source-bars"></select></label></div><div class="source-tuning"><select class="source-key"></select><span class="key-shift"></span></div><span class="source-major-note"></span>';
       const filename = lane.filename || lane.name;
       row.querySelector('.source-title').textContent = filename;
       row.querySelector('.source-title').title = filename;
@@ -386,13 +418,19 @@
           : `${lane.name}を${roleLabels[lane.playedRole]}にしました。`,
         roleMoves(before, lane), state.lanes.some((other) => other.locked && other !== lane) ? 'LOCK中のレーンは配置を保持します。' : '', '↶で戻せます。'].filter(Boolean).join(''), 6500);
       });
-      // Whole-loop mode plays the source unchopped, stretched over its bars.
+      // Whole-loop mode plays the source unchopped, stretched over its bars;
+      // onset mode cuts it where each sound starts. FM sources already cut
+      // at their note boundaries.
       const modeSelect = row.querySelector('.source-mode');
       const barsSelect = row.querySelector('.source-bars');
       const looping = lane.playMode === 'loop';
+      const mode = playMode(lane);
       const estimated = loopLength.estimateBars(lane.buffer.duration, lane.filename || lane.name);
-      modeSelect.value = looping ? 'loop' : 'chop';
+      if (Array.isArray(lane.segments)) modeSelect.querySelector('option[value="onset"]').remove();
+      modeSelect.value = mode;
       modeSelect.disabled = importing;
+      modeSelect.title = Array.isArray(lane.segments) ? '刻む：音符の区切りで切る / ループのまま：切らずに通して鳴らす'
+        : '刻む：均等に切る / 音の頭で刻む：音の立ち上がりで切る（細かさはsize） / ループのまま：切らずに通して鳴らす';
       modeSelect.setAttribute('aria-label', `${lane.name} の使い方`);
       row.querySelector('.source-bars-control').hidden = !looping;
       [['auto', `自動（${estimated}小節）`], ...loopLength.barOptions.map((bars) => [String(bars), `${bars}小節`])].forEach(([value, label]) => {
@@ -409,15 +447,27 @@
         const detailText = `${row.querySelector('.source-detail').textContent} · ${bars}小節ループ（元 ${Math.round(bars * 240 / lane.buffer.duration)} BPM → ${loopLength.rateFor(lane.buffer.duration, bars, state.settings.bpm).toFixed(2)}倍速）`;
         row.querySelector('.source-detail').textContent = detailText;
         row.querySelector('.source-detail').title = detailText;
+      } else if (mode === 'onset') {
+        const pieces = onsetPieces(lane);
+        const detailText = `${row.querySelector('.source-detail').textContent} · ${lane.locked ? '音の頭で刻む（LOCK中は今の断片を保持）' : pieces ? `音の頭 ${pieces}か所で刻む` : '音が見つからないため均等に刻む'}`;
+        row.querySelector('.source-detail').textContent = detailText;
+        row.querySelector('.source-detail').title = detailText;
       }
-      modeSelect.addEventListener('change', () => {
-        if (importing || modeSelect.value === (looping ? 'loop' : 'chop')) return;
+      modeSelect.addEventListener('change', async () => {
+        const next = ['chop', 'onset', 'loop'].includes(modeSelect.value) ? modeSelect.value : 'chop';
+        if (importing || next === mode) return;
+        if (next === 'onset' && !(await findOnsets(lane))) { modeSelect.value = mode; return; }
         remember();
-        lane.playMode = modeSelect.value === 'loop' ? 'loop' : 'chop';
+        lane.playMode = next;
         if (!lane.loopBars) lane.loopBars = estimated;
         regenerateEvents();
         updateView();
         renderAudio();
+        if (next === 'onset') {
+          const pieces = onsetPieces(lane);
+          notify(lane.locked ? `${lane.name}はLOCK中のため今の断片を保持します。解除して作り直すと音の頭で刻みます。↶で戻せます。`
+            : pieces ? `${lane.name}を音の頭 ${pieces}か所で刻みます。sizeを小さくすると細かく、大きくすると長く刻みます。↶で戻せます。` : `${lane.name}に音が見つからないため、均等に刻みます。`, 6500);
+        }
       });
       barsSelect.addEventListener('change', () => {
         if (importing) return;
