@@ -11,6 +11,8 @@
   const MAX_TOTAL_SECONDS = 240;
   const colors = ['#a7d1ff', '#d6bfff', '#e7e68c', '#ffb99f', '#9dd8c8', '#efb8d3', '#b7c6f5', '#ddc5a1'];
   const MAX_HISTORY = 30;
+  // New sources start with PITCH ENV on 30% of their slices.
+  const DEFAULT_ENV_CHANCE = 30;
   const state = { settings: { ...generator.defaults, pitchEnvDepth: 0, pitchEnvTime: 80, pitchEnvDepthRandom: 0, pitchEnvTimeRandom: 0, pitchEnvSeed: '', glitchAmount: 0, glitchSize: 50, glitchCrush: 0, glitchSeed: '', keySync: true, targetKey: 'auto', maxVoices: 8, maxDrumVoices: 8 }, seed: 'BLUE01', lanes: [], events: [], buffer: null };
   const envelopeChances = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
   const roleLabels = { lead: '主役', bass: 'ベース', fill: '合いの手', drums: 'ドラム' };
@@ -103,6 +105,28 @@
       if (!lane.locked || !lane.playedRole) lane.playedRole = parts[lane.id];
     });
     getEvents();
+  }
+
+  // New sources play as leads, and drums keep their drum part, until a role
+  // is picked by hand; a category change moves an unpicked role along.
+  function startingRole(lane) {
+    return categories.get(lane) === 'drums' ? 'auto' : 'lead';
+  }
+
+  // New sources are cut at their onsets. Without an analysis they are
+  // sliced evenly, and the mode can be picked again later.
+  async function onsetStart(lane) {
+    busyLabel = 'FINDING ONSETS…';
+    updateButtons();
+    try {
+      lane.onsets = await window.BlueLoopOnsets.analyze(lane.buffer);
+      return 'onset';
+    } catch (error) {
+      return 'chop';
+    } finally {
+      busyLabel = '';
+      updateButtons();
+    }
   }
 
   function playMode(lane) {
@@ -330,7 +354,7 @@
 
   function laneEnvelopeChance(lane) {
     const value = Number(lane && lane.pitchEnvChance);
-    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 100;
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : DEFAULT_ENV_CHANCE;
   }
 
   function playbackEvents() {
@@ -386,6 +410,7 @@
         if (categories.get(lane) === categorySelect.value) return;
         remember();
         lane.category = categorySelect.value;
+        if (!lane.rolePicked) lane.role = startingRole(lane);
         updateView();
         renderAudio();
       });
@@ -408,6 +433,7 @@
         remember();
         const before = new Map(state.lanes.map((other) => [other.id, playedRole(other, generator.roles(state.lanes))]));
         lane.role = value;
+        lane.rolePicked = true;
         // Roles shape the composition, so unlocked lanes are rebuilt with the same SEED.
         regenerateEvents();
         updateView();
@@ -846,13 +872,16 @@
           errors.push(`${file.name}: キー解析を保留しました。音源は読み込めます。`);
         }
         const category = categories.inferFilename(file.name);
-        state.lanes.push({
+        const lane = {
           id: `user-${++uploadNumber}`, name: file.name.replace(/\.[^.]+$/, ''), filename: file.name, kind: 'upload', category,
           playMode: loopLength.prefersLoop(file.name, category) ? 'loop' : 'chop', loopBars: loopLength.estimateBars(buffer.duration, file.name),
           buffer, color: colors[state.lanes.length % colors.length], volume: .7,
-          muted: false, solo: false, locked: false, events: [], pitchEnvChance: 100,
+          muted: false, solo: false, locked: false, events: [], pitchEnvChance: DEFAULT_ENV_CHANCE,
           detectedKey, keyOverride: 'auto', keyShift: 0,
-        });
+        };
+        lane.role = startingRole(lane);
+        if (lane.playMode !== 'loop') lane.playMode = await onsetStart(lane);
+        state.lanes.push(lane);
         added++;
       } catch (error) { errors.push(`${file.name}: ${error.message}`); }
     }
@@ -885,11 +914,13 @@
           : { tonic: 9, mode: 'minor', status: 'tonal', source: 'demo', confidence: 1, label: 'A minor' };
         lane.keyOverride = 'auto';
         lane.keyShift = 0;
-        lane.pitchEnvChance = 100;
+        lane.pitchEnvChance = DEFAULT_ENV_CHANCE;
+        lane.role = startingRole(lane);
       });
       const existing = new Set(state.lanes.map((lane) => lane.id));
       const capacity = Math.min(MAX_SOURCES - state.lanes.length, Math.floor((MAX_TOTAL_SECONDS - state.lanes.reduce((sum, lane) => sum + lane.buffer.duration, 0)) / 8));
       const additions = demos.filter((lane) => !existing.has(lane.id)).slice(0, Math.max(0, capacity));
+      for (const lane of additions) lane.playMode = await onsetStart(lane);
       if (additions.length) {
         if (!initial) remember();
         state.lanes.push(...additions);
@@ -1062,7 +1093,7 @@
       id: `fm-${++fmNumber}`, name, kind: 'fm', category: 'other', buffer, releaseSeconds: 0.03,
       ...window.BlueLoopFMSynth.noteSegments(phrase),
       synthSettings: { ...options }, color: colors[state.lanes.length % colors.length], volume: .7,
-      muted: false, solo: false, locked: false, events: [], pitchEnvChance: 100,
+      muted: false, solo: false, locked: false, events: [], pitchEnvChance: DEFAULT_ENV_CHANCE, role: 'lead',
       detectedKey: harmony.fromValue(`${options.tonic}:major`, 'synth'), keyOverride: 'auto', keyShift: 0,
     });
     stopFMPreview();
