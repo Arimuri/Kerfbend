@@ -67,3 +67,16 @@
 .fm-add-button:hover:not(:disabled){background:#1c3dcc}
 @media(min-width:541px) and (max-width:800px){.source-actions{grid-column:2;margin-top:12px}}
 @media(max-width:540px){#fm-dialog{padding:20px}.fm-controls{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 14px}.fm-controls .fm-progression{grid-column:1/-1}.fm-meta{flex-wrap:wrap;gap:10px}.fm-preview-actions button{font-size:10px}.fm-source-button{font-size:11px}.source-actions{margin-top:14px}}
+.lane-track.is-editable canvas{touch-action:pan-y}
+.event-editor{margin-top:14px;border:1px solid #e4e9f1;border-radius:4px;background:#fafbfe;padding:9px 12px 10px}
+.event-editor-top{display:flex;align-items:center;gap:10px;min-height:22px}.event-editor-top strong{font:8px var(--mono);letter-spacing:1px;color:var(--blue)}
+.event-editor-title{flex:1;min-width:0;font-size:10px;color:#71809c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.event-editor.has-selection .event-editor-title{color:var(--ink)}
+.event-editor-top .icon-button{width:22px;height:22px;font-size:14px}.event-editor:not(.has-selection) .event-editor-top .icon-button{visibility:hidden}
+.piece-strip{display:block;width:100%;height:46px;margin:8px 0 9px;border:1px solid #e4e9f1;border-radius:3px;background:#fff}.event-editor.has-selection .piece-strip{cursor:pointer}
+.event-editor-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
+.event-editor-group{display:flex;align-items:center;gap:5px;font:8px var(--mono);color:#8592ab;letter-spacing:.5px}.event-editor-group>span{margin-right:2px}
+.event-editor-group button{width:24px;height:22px;padding:0;border-radius:3px;font-size:9px;line-height:1}
+.event-editor-group output{min-width:58px;text-align:center;font:10px var(--mono);color:var(--blue);white-space:nowrap}
+.event-delete{margin-left:auto;padding:4px 11px;border-radius:3px;font-size:10px}
+.event-editor-hint{margin:8px 0 0;font-size:8px;line-height:1.6;color:#9ca5b5}
+@media(max-width:540px){.event-editor{padding:8px 9px 9px}.event-editor-controls{gap:8px 12px}.event-editor-group output{min-width:46px}.event-delete{margin-left:0}}

@@ -636,10 +636,25 @@
     return phrasePlan(normalize(settings), seed);
   }
 
+  // The cuts a finished phrase can swap in, in source order: equal slices,
+  // onset pieces at the current SIZE, or the single notes of a generated
+  // phrase. A whole loop has nothing to swap.
+  function pieces(lane, settings) {
+    if (!lane || lane.playMode === 'loop') return [];
+    const params = normalize(settings);
+    const plan = segmentPlan(lane);
+    if (plan) {
+      return plan.notes.map(function (note, index) { return withCut({}, noteCut(plan, index, 1, 60 / params.bpm / 4)); });
+    }
+    const onsets = onsetCuts(lane, params);
+    const context = { onsets, chop: onsets ? onsets.cuts.length : params.chop };
+    return Array.from({ length: context.chop }, function (_, slice) { return sliceAt(context, slice); });
+  }
+
   // The form letter a bar plays: A, A′ (A with a new ending), B or B′.
   function formLabel(bar, bars) {
     return { A: 'A', A2: 'A′', B: 'B', B2: 'B′' }[formUnit(bar, Math.round(bounded(bars, defaults.bars, 1, 16)))];
   }
 
-  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames, phraseEnds, formLabel, chordLane });
+  root.BlueLoopGenerator = Object.freeze({ defaults, generate, duration, seedString, getChop, roles, roleNames, phraseEnds, formLabel, chordLane, pieces, withCut });
 })(typeof window !== 'undefined' ? window : globalThis);

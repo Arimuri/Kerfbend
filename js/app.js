@@ -6,6 +6,7 @@
   const loopLength = window.BlueLoopLength;
   const harmony = window.BlueLoopKeySync;
   const categories = window.BlueLoopSourceCategory;
+  const edit = window.BlueLoopPhraseEdit;
   const engine = new window.BlueLoopAudio.Engine();
   const MAX_SOURCES = 16;
   const MAX_TOTAL_SECONDS = 240;
@@ -36,6 +37,9 @@
   let fmBusy = false;
   let fmVersion = 0;
   let fmPreviewSource = null;
+  // The cut picked for editing, by lane and step, and a drag in progress.
+  let selection = null;
+  let drag = null;
 
   function fillKeyOptions(select, includeNotes = false) {
     ['major', ...(includeNotes ? ['minor', 'unknown'] : [])].forEach((mode) => {
@@ -104,6 +108,9 @@
       lane.events = events.filter((event) => event.laneId === lane.id);
       if (!lane.locked || !lane.playedRole) lane.playedRole = parts[lane.id];
     });
+    // A rebuilt lane has new cuts, so its selection goes.
+    const chosen = selection && state.lanes.find((lane) => lane.id === selection.laneId);
+    if (!chosen || !chosen.locked) selection = null;
     getEvents();
   }
 
@@ -192,6 +199,7 @@
     $('live-label').title = analysisLabel;
     $('live-label').classList.toggle('playing', playing);
     $('undo-button').title = `元に戻す (⌘/Ctrl + Z) — ${history.length}`;
+    eventEditor();
   }
 
   function stop() {
@@ -358,7 +366,310 @@
   }
 
   function playbackEvents() {
-    return window.BlueLoopPlayback.plan(state.lanes, state.settings, state.events);
+    return window.BlueLoopPlayback.plan(state.lanes, state.settings, drag ? state.lanes.flatMap(shownEvents) : state.events);
+  }
+
+  // A dragged lane shows where its cuts would land before the drop.
+  function shownEvents(lane) {
+    return drag && drag.lane === lane ? drag.events : lane.events;
+  }
+
+  // Whole loops play as one piece; every chopped lane can be edited.
+  function editable(lane) {
+    return playMode(lane) !== 'loop';
+  }
+
+  function selected() {
+    const lane = selection && state.lanes.find((candidate) => candidate.id === selection.laneId);
+    const event = lane && editable(lane) ? shownEvents(lane).find((candidate) => candidate.step === selection.step) : null;
+    return event ? { lane, event } : null;
+  }
+
+  function stepSeconds() {
+    return 60 / state.settings.bpm / 4;
+  }
+
+  // Where a cut sounds on its track, in steps: from its swung start for its
+  // gate, or less when its piece runs out. Even the shortest keeps a step to click on.
+  function cutSpan(lane, event) {
+    const playback = window.BlueLoopAudio.eventPlayback(lane, event, state.settings);
+    const start = playback ? playback.start / stepSeconds() : event.step;
+    return { start, end: start + Math.max(1, playback ? playback.duration / stepSeconds() : event.durationSteps) };
+  }
+
+  function trackStep(canvas, clientX) {
+    const bounds = canvas.getBoundingClientRect();
+    return (clientX - bounds.left) / bounds.width * state.settings.bars * 16;
+  }
+
+  // Grabbing a cut near the end of its sound sets its length; elsewhere it
+  // moves. A swung cut can run under the next one, so the selected cut's
+  // grip comes first.
+  function grabAt(lane, canvas, clientX) {
+    const position = trackStep(canvas, clientX);
+    const unit = canvas.getBoundingClientRect().width / (state.settings.bars * 16);
+    const onEdge = (event) => {
+      const span = cutSpan(lane, event);
+      const width = (span.end - span.start) * unit;
+      return width >= 10 && position < span.end && (span.end - position) * unit <= Math.min(6, width / 4);
+    };
+    const current = selected();
+    if (current && current.lane === lane && onEdge(current.event)) return { position, hit: current.event, edge: true };
+    const hit = edit.at(lane.events, position, (event) => cutSpan(lane, event));
+    return { position, hit, edge: !!hit && onEdge(hit) };
+  }
+
+  // Edits keep a finished phrase: the edited lane locks, so a new phrase,
+  // a role or a slider change cannot rebuild it until LOCK is released.
+  function commitEdit(lane, events, step) {
+    selection = step == null ? null : { laneId: lane.id, step };
+    if (JSON.stringify(events) === JSON.stringify(lane.events)) { showSelection(); return; }
+    remember();
+    const locking = !lane.locked;
+    lane.events = events;
+    lane.locked = true;
+    getEvents();
+    sequenceView();
+    showSelection();
+    updateButtons();
+    renderAudio();
+    if (locking) notify(`${lane.name}を編集したのでLOCKしました。新しいフレーズやスライダーでも今の配置を保持します。LOCKを外すと作り直せます。↶で戻せます。`, 6500);
+  }
+
+  function showSelection() {
+    drawTracks();
+    eventEditor();
+    drawPieceStrip();
+  }
+
+  // Picking a cut while the loop is stopped plays its piece of the source.
+  async function audition(lane, event) {
+    const playback = !playing && event ? window.BlueLoopAudio.eventPlayback(lane, event, state.settings) : null;
+    if (!playback) return;
+    try { await engine.playPreview(lane.buffer, Math.min(2, playback.sliceSeconds), playback.offset); }
+    catch (error) { notify(error.message); }
+  }
+
+  function pressTrack(pointer, lane, canvas) {
+    if (importing || pointer.button !== 0 || drag) return;
+    const grab = grabAt(lane, canvas, pointer.clientX);
+    if (!grab.hit) {
+      if (selection) { selection = null; showSelection(); }
+      return;
+    }
+    pointer.preventDefault();
+    canvas.setPointerCapture(pointer.pointerId);
+    selection = { laneId: lane.id, step: grab.hit.step };
+    drag = {
+      lane, canvas, pointerId: pointer.pointerId, from: grab.hit.step, step: grab.hit.step, x: pointer.clientX,
+      offset: grab.position - grab.hit.step, resize: grab.edge, events: lane.events, started: false,
+    };
+    canvas.style.cursor = grab.edge ? 'ew-resize' : 'grabbing';
+    showSelection();
+  }
+
+  function dragTrack(pointer) {
+    if (pointer.pointerId !== drag.pointerId) return;
+    // A few pixels of wobble are still a click.
+    if (!drag.started && Math.abs(pointer.clientX - drag.x) < 4) return;
+    drag.started = true;
+    const total = state.settings.bars * 16;
+    const position = trackStep(drag.canvas, pointer.clientX);
+    const events = drag.resize
+      ? edit.resize(drag.lane.events, drag.from, position - drag.from, total)
+      : edit.move(drag.lane.events, drag.from, position - drag.offset, total);
+    const step = drag.resize ? drag.from : Math.max(0, Math.min(total - 1, Math.round(position - drag.offset)));
+    if (JSON.stringify(events) === JSON.stringify(drag.events)) return;
+    drag.events = events;
+    drag.step = step;
+    selection = { laneId: drag.lane.id, step };
+    drawTracks();
+    eventEditor();
+  }
+
+  function releaseTrack(pointer) {
+    if (!drag || pointer.pointerId !== drag.pointerId) return;
+    const { lane, events, step, canvas, started } = drag;
+    drag = null;
+    canvas.style.cursor = '';
+    if (started && events !== lane.events) { commitEdit(lane, events, step); return; }
+    showSelection();
+    audition(lane, lane.events.find((event) => event.step === step));
+  }
+
+  function cancelDrag() {
+    if (!drag) return;
+    drag.canvas.style.cursor = '';
+    drag = null;
+    showSelection();
+  }
+
+  function hoverTrack(pointer, lane, canvas) {
+    if (importing) { canvas.style.cursor = ''; return; }
+    const grab = grabAt(lane, canvas, pointer.clientX);
+    canvas.style.cursor = grab.edge ? 'ew-resize' : grab.hit ? 'grab' : '';
+  }
+
+  // A new cut copies the one playing before it (else after it, else the
+  // source's first piece) and plays until the next cut at most.
+  function cutTemplate(lane, step) {
+    const before = lane.events.filter((event) => event.step < step).sort((first, second) => second.step - first.step)[0];
+    const after = lane.events.filter((event) => event.step > step).sort((first, second) => first.step - second.step)[0];
+    if (before || after) return before || after;
+    const piece = generator.pieces(lane, state.settings)[0];
+    return piece ? { laneId: lane.id, ...piece, durationSteps: 2, semitones: 0, reverse: false, velocity: 0.8 } : null;
+  }
+
+  // Double-clicking a cut removes it; double-clicking a gap adds one there.
+  function doubleClickTrack(pointer, lane, canvas) {
+    if (importing || drag) return;
+    const total = state.settings.bars * 16;
+    const grab = grabAt(lane, canvas, pointer.clientX);
+    if (grab.hit) { commitEdit(lane, edit.remove(lane.events, grab.hit.step), null); return; }
+    const step = Math.max(0, Math.min(total - 1, Math.floor(grab.position)));
+    const events = edit.add(lane.events, step, cutTemplate(lane, step), total);
+    if (events === lane.events) return;
+    commitEdit(lane, events, step);
+    audition(lane, events.find((event) => event.step === step));
+  }
+
+  function nudge(steps) {
+    const current = selected();
+    const total = state.settings.bars * 16;
+    const step = current ? current.event.step + steps : -1;
+    if (step < 0 || step >= total || current.lane.events.some((event) => event.step === step)) return;
+    commitEdit(current.lane, edit.move(current.lane.events, current.event.step, step, total), step);
+  }
+
+  function lengthen(steps) {
+    const current = selected();
+    if (!current) return;
+    commitEdit(current.lane, edit.resize(current.lane.events, current.event.step, current.event.durationSteps + steps, state.settings.bars * 16), current.event.step);
+  }
+
+  // Piece numbers wrap around, so the arrows can cycle through a source.
+  function choosePiece(index) {
+    const current = selected();
+    const pieces = current ? generator.pieces(current.lane, state.settings) : [];
+    if (!pieces.length) return;
+    const { lane, event } = current;
+    const events = edit.swap(lane.events, event.step, pieces[(index % pieces.length + pieces.length) % pieces.length]);
+    commitEdit(lane, events, event.step);
+    audition(lane, events.find((candidate) => candidate.step === event.step));
+  }
+
+  function shiftPiece(steps) {
+    const current = selected();
+    if (current) choosePiece(edit.pieceOf(generator.pieces(current.lane, state.settings), current.event) + steps);
+  }
+
+  function removeSelected() {
+    const current = selected();
+    if (current) commitEdit(current.lane, edit.remove(current.lane.events, current.event.step), null);
+  }
+
+  // Arrows move the selected cut and change its piece; Delete removes it.
+  function editKey(key) {
+    if (!selected() || importing || drag || key.metaKey || key.ctrlKey || key.altKey) return false;
+    const actions = {
+      ArrowLeft: () => nudge(-1), ArrowRight: () => nudge(1), ArrowUp: () => shiftPiece(1), ArrowDown: () => shiftPiece(-1),
+      Delete: removeSelected, Backspace: removeSelected, Escape: () => { selection = null; showSelection(); },
+    };
+    if (!actions[key.key]) return false;
+    actions[key.key]();
+    return true;
+  }
+
+  function position(step) {
+    return `${String(Math.floor(step / 16) + 1).padStart(2, '0')} : ${String(Math.floor(step % 16 / 4) + 1).padStart(2, '0')} : ${step % 4 + 1}`;
+  }
+
+  function eventEditor() {
+    const current = selected();
+    const editor = $('event-editor');
+    editor.hidden = !state.lanes.length;
+    editor.classList.toggle('has-selection', !!current);
+    const buttons = ['event-previous-piece', 'event-next-piece', 'event-earlier', 'event-later', 'event-shorter', 'event-longer', 'event-delete'];
+    if (!current) {
+      $('event-editor-title').textContent = '断片をクリックして選ぶと、鳴らす断片とタイミングを変えられます';
+      ['event-piece', 'event-position', 'event-length'].forEach((id) => { $(id).textContent = '—'; });
+      buttons.forEach((id) => { $(id).disabled = true; });
+      return;
+    }
+    const { lane, event } = current;
+    const total = state.settings.bars * 16;
+    const pieces = generator.pieces(lane, state.settings);
+    const next = lane.events.filter((other) => other.step > event.step).reduce((step, other) => Math.min(step, other.step), total);
+    const taken = (step) => lane.events.some((other) => other.step === step);
+    $('event-editor-title').textContent = `${lane.name} · ${roleLabels[lane.playedRole] || ''}${lane.locked ? '' : '（編集するとLOCKします）'}`;
+    $('event-piece').textContent = `${edit.pieceOf(pieces, event) + 1} / ${pieces.length}`;
+    $('event-position').textContent = position(event.step);
+    $('event-length').textContent = `16分×${event.durationSteps}`;
+    const disabled = {
+      'event-previous-piece': pieces.length < 2, 'event-next-piece': pieces.length < 2,
+      'event-earlier': event.step === 0 || taken(event.step - 1), 'event-later': event.step >= total - 1 || taken(event.step + 1),
+      'event-shorter': event.durationSteps <= 1, 'event-longer': event.step + event.durationSteps >= next, 'event-delete': false,
+    };
+    buttons.forEach((id) => { $(id).disabled = importing || !!drag || disabled[id]; });
+  }
+
+  // The selected lane's source with its pieces; the cut's piece is filled in.
+  function drawPieceStrip() {
+    const canvas = $('piece-strip');
+    const bounds = canvas.getBoundingClientRect();
+    if (!bounds.width) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(bounds.width * dpr);
+    canvas.height = Math.round(bounds.height * dpr);
+    const current = selected();
+    if (!current) { canvas.setAttribute('aria-label', '素材の断片（未選択）'); return; }
+    const context = canvas.getContext('2d');
+    context.scale(dpr, dpr);
+    const { lane, event } = current;
+    const width = bounds.width;
+    const height = bounds.height;
+    const pieces = generator.pieces(lane, state.settings);
+    const chosen = edit.pieceOf(pieces, event);
+    pieces.forEach((piece, index) => {
+      const span = edit.span(pieces, index);
+      context.fillStyle = index === chosen ? lane.color : index % 2 ? '#eef1f7' : '#f7f9fc';
+      context.fillRect(span.start * width, 0, (span.end - span.start) * width, height);
+    });
+    const data = lane.buffer.getChannelData(0);
+    const peak = sourcePeak(lane.buffer);
+    const columns = Math.max(1, Math.floor(width / 2));
+    context.fillStyle = '#30435c';
+    context.globalAlpha = 0.38;
+    for (let column = 0; column < columns; column++) {
+      const from = Math.floor(column / columns * data.length);
+      const to = Math.floor((column + 1) / columns * data.length);
+      const stride = Math.max(1, Math.floor((to - from) / 200));
+      let amplitude = 0;
+      for (let frame = from; frame < to; frame += stride) amplitude = Math.max(amplitude, Math.abs(data[frame]));
+      const line = Math.max(1, Math.min(height - 16, amplitude / peak * (height - 16)));
+      context.fillRect(column * width / columns, 10 + (height - 12 - line) / 2, 1, line);
+    }
+    context.globalAlpha = 1;
+    context.strokeStyle = '#c3cbdb';
+    context.lineWidth = 1;
+    context.font = '7px monospace';
+    pieces.forEach((piece, index) => {
+      const span = edit.span(pieces, index);
+      const x = Math.round(span.start * width) + 0.5;
+      context.beginPath();
+      context.moveTo(x, 0);
+      context.lineTo(x, height);
+      context.stroke();
+      context.fillStyle = index === chosen ? '#202c45' : '#8592ab';
+      if ((span.end - span.start) * width > 14) context.fillText(String(index + 1), x + 3, 8);
+    });
+    if (chosen >= 0) {
+      const span = edit.span(pieces, chosen);
+      context.strokeStyle = '#244ce5';
+      context.lineWidth = 1.5;
+      context.strokeRect(span.start * width + 0.75, 0.75, Math.max(1, (span.end - span.start) * width - 1.5), height - 1.5);
+    }
+    canvas.setAttribute('aria-label', `${lane.name}の素材：${pieces.length}個の断片のうち${chosen + 1}番目を鳴らす`);
   }
 
   function sourceList() {
@@ -607,6 +918,15 @@
       const count = audible.filter((event) => event.laneId === lane.id).length;
       canvas.setAttribute('aria-label', `${lane.name}: ${count}個の発音 / ${lane.events.length}個の断片`);
       canvas.setAttribute('role', 'img');
+      if (editable(lane)) {
+        row.querySelector('.lane-track').classList.add('is-editable');
+        canvas.addEventListener('pointerdown', (pointer) => pressTrack(pointer, lane, canvas));
+        canvas.addEventListener('pointermove', (pointer) => (drag ? dragTrack(pointer) : hoverTrack(pointer, lane, canvas)));
+        canvas.addEventListener('pointerup', releaseTrack);
+        canvas.addEventListener('pointercancel', cancelDrag);
+        canvas.addEventListener('lostpointercapture', cancelDrag);
+        canvas.addEventListener('dblclick', (pointer) => doubleClickTrack(pointer, lane, canvas));
+      }
       ['lock', 'mute', 'solo'].forEach((action) => {
         const key = { lock: 'locked', mute: 'muted', solo: 'solo' }[action];
         const button = row.querySelector(`.${action}-button`);
@@ -733,7 +1053,17 @@
       }
       const data = lane.buffer.getChannelData(0);
       const peak = sourcePeak(lane.buffer);
-      audible.filter((event) => event.laneId === lane.id).forEach((event) => {
+      const heard = audible.filter((event) => event.laneId === lane.id);
+      const heardSteps = new Set(heard.map((event) => event.step));
+      // Cuts a mute or the voice limit leaves silent stay as outlines to edit.
+      context.strokeStyle = lane.color;
+      context.setLineDash([3, 2]);
+      shownEvents(lane).filter((event) => !heardSteps.has(event.step)).forEach((event) => {
+        const span = cutSpan(lane, event);
+        context.strokeRect(span.start * unit + 1.5, 17.5, Math.max(2, (span.end - span.start) * unit - 2), height - 35);
+      });
+      context.setLineDash([]);
+      heard.forEach((event) => {
         const playback = window.BlueLoopAudio.eventPlayback(lane, event, state.settings);
         if (!playback) return;
         const stepSeconds = 60 / state.settings.bpm / 4;
@@ -793,6 +1123,18 @@
           context.fillText(`${totalSemitones > 0 ? '+' : ''}${totalSemitones}`, x + 2, y - 3);
         }
       });
+      // The selected cut is framed, with a grip where dragging sets its length.
+      const current = selection && selection.laneId === lane.id ? shownEvents(lane).find((event) => event.step === selection.step) : null;
+      if (current) {
+        const span = cutSpan(lane, current);
+        const x = span.start * unit;
+        const w = Math.min((span.end - span.start) * unit, width - x);
+        context.strokeStyle = '#244ce5';
+        context.lineWidth = 1.5;
+        context.strokeRect(x + 0.75, 3.75, Math.max(2, w - 1.5), height - 7.5);
+        context.fillStyle = '#244ce5';
+        if (w >= 10) context.fillRect(x + w - 3.5, height / 2 - 7, 2, 14);
+      }
     });
   }
 
@@ -804,6 +1146,7 @@
     sequenceView();
     drawTracks();
     updateButtons();
+    drawPieceStrip();
   }
 
   async function togglePlay() {
@@ -817,6 +1160,7 @@
 
   function newPhrase() {
     if (!state.lanes.length || importing) return;
+    cancelDrag();
     if (state.lanes.every((lane) => lane.locked)) {
       notify('すべてのレーンが固定されています。LOCKを解除すると再生成できます。');
       return;
@@ -832,6 +1176,7 @@
 
   function undo() {
     if (!history.length || importing) return;
+    cancelDrag();
     Object.assign(state, history.pop());
     getEvents();
     updateView();
@@ -1273,6 +1618,17 @@
   $('close-fm').addEventListener('click', () => $('fm-dialog').close());
   $('fm-dialog').addEventListener('cancel', invalidateFM);
   $('fm-dialog').addEventListener('close', invalidateFM);
+  [['event-previous-piece', () => shiftPiece(-1)], ['event-next-piece', () => shiftPiece(1)], ['event-earlier', () => nudge(-1)], ['event-later', () => nudge(1)],
+    ['event-shorter', () => lengthen(-1)], ['event-longer', () => lengthen(1)], ['event-delete', removeSelected]].forEach(([id, action]) => {
+    $(id).addEventListener('click', () => { if (!importing && !drag) action(); });
+  });
+  $('event-editor-close').addEventListener('click', () => { selection = null; showSelection(); });
+  $('piece-strip').addEventListener('click', (pointer) => {
+    const current = selected();
+    if (importing || drag || !current) return;
+    const bounds = $('piece-strip').getBoundingClientRect();
+    choosePiece(edit.pieceAt(generator.pieces(current.lane, state.settings), (pointer.clientX - bounds.left) / bounds.width));
+  });
   $('help-button').addEventListener('click', () => $('help-dialog').showModal());
   $('close-help').addEventListener('click', () => $('help-dialog').close());
   $('help-dialog').addEventListener('click', (event) => { if (event.target === $('help-dialog')) $('help-dialog').close(); });
@@ -1284,10 +1640,11 @@
     }
     else if (event.key.toLowerCase() === 'r' && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); newPhrase(); }
     else if (event.key.toLowerCase() === 'z' && (event.metaKey || event.ctrlKey) && !event.shiftKey) { event.preventDefault(); undo(); }
+    else if (editKey(event)) event.preventDefault();
   });
   window.addEventListener('pagehide', stop);
-  if ('ResizeObserver' in window) new ResizeObserver(drawTracks).observe($('sequence'));
-  else window.addEventListener('resize', drawTracks);
+  if ('ResizeObserver' in window) new ResizeObserver(() => { drawTracks(); drawPieceStrip(); }).observe($('sequence'));
+  else window.addEventListener('resize', () => { drawTracks(); drawPieceStrip(); });
 
   function animate() {
     const progress = playing ? engine.progress : 0;

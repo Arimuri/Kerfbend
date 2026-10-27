@@ -497,6 +497,9 @@
       var request = ++this._playRequest;
       var context = await this.init();
       if (request !== this._playRequest) return;
+      // A new render while the loop plays picks up where the loop is, so
+      // edits and slider changes are heard without starting over.
+      var offset = this.source ? this.progress * buffer.duration : 0;
       this._stopMain();
       this._stopPreview();
       var source = context.createBufferSource();
@@ -507,10 +510,11 @@
       source.loopEnd = buffer.duration;
       source.connect(gain);
       gain.connect(this.master);
-      this.startTime = context.currentTime + 0.008;
-      gain.gain.setValueAtTime(0, this.startTime);
-      gain.gain.linearRampToValueAtTime(1, this.startTime + 0.006);
-      source.start(this.startTime);
+      var start = context.currentTime + 0.008;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(1, start + 0.006);
+      source.start(start, offset);
+      this.startTime = start - offset;
       this.source = source;
       this._sourceGain = gain;
       this.playingBuffer = buffer;
@@ -547,7 +551,8 @@
       }
     }
 
-    async playPreview(buffer, maxSeconds = 4) {
+    // Plays a source from `offsetSeconds` (its top by default) for up to maxSeconds.
+    async playPreview(buffer, maxSeconds = 4, offsetSeconds = 0) {
       if (!isBuffer(buffer)) return;
       var request = ++this._playRequest;
       var context = await this.init();
@@ -555,7 +560,8 @@
       this._stopPreview();
       var source = context.createBufferSource();
       var gain = context.createGain();
-      var duration = Math.min(buffer.duration, Math.max(0.01, number(maxSeconds, 4)));
+      var from = clamp(number(offsetSeconds, 0), 0, Math.max(0, buffer.duration - 0.01));
+      var duration = Math.min(buffer.duration - from, Math.max(0.01, number(maxSeconds, 4)));
       var now = context.currentTime;
       source.buffer = buffer;
       source.connect(gain);
@@ -564,7 +570,7 @@
       gain.gain.linearRampToValueAtTime(0.65, now + Math.min(0.006, duration / 3));
       gain.gain.setValueAtTime(0.65, now + Math.max(duration - 0.008, duration * 2 / 3));
       gain.gain.linearRampToValueAtTime(0, now + duration);
-      source.start(now, 0, duration);
+      source.start(now, from, duration);
       this._preview = source;
       var engine = this;
       source.onended = function () {
