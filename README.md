@@ -85,6 +85,7 @@ For imported sources, key information is prioritized as **manual override → fi
 - `js/key-sync.js`: Key-information priority, target selection, and transposition calculations.
 - `js/app.js`: Interface, undo history, version tracking for asynchronous renders, source import, and waveform display.
 - `styles.css`: Desktop and mobile layouts.
+- `assets/itbs-logo.png`: The in the blue shirt logo.
 
 Open `tests/index.html` in a browser and click **Run tests** to verify generation reproducibility and locks; FM pitch, waveforms, and reproducibility; voice limits and arrangement preservation; filename parsing and false positives; key analysis and onset detection of synthesized audio; relative keys and key-information priority; and actual Web Audio/WAV pitch, duration, reverse playback, and peak limiting. Key analysis and onset detection are tested with synthesized audio; evaluation against labeled real recordings has not yet been performed.
 
