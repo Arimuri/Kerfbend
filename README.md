@@ -63,7 +63,7 @@ For imported sources, key information is prioritized as **manual override → fi
 - Up to 40 MB and 120 seconds per file, with 240 seconds of source audio in total. Supported formats depend on the browser's decoder. WAV and MP3 are generally straightforward; formats such as AIFF may not load in every environment.
 - The same sources, lane IDs, roles, settings, and SEED produce the same arrangement. Locked lanes retain their previous arrangement, and answering parts follow a locked lead.
 - Each lane builds one-bar phrases and arranges them as A → A′ → B → A (the ruler labels each bar): A′ keeps the first three beats of A and replaces its last beat, and B is a contrasting bar with another rhythm from another part of the source. Two-bar loops play A → A′; eight-bar loops repeat the form, vary the ending of the second B, and close on A′. Imported and demo sources are divided at their onsets (or into equal slices), with short fades to reduce clicks; FM sources are cut into runs of whole notes.
-- Adjustments redraw and re-render the phrase. If playback is active, it restarts from the beginning of the loop. Playback and WAV export use the same audio buffer.
+- Adjustments redraw and re-render the phrase. If playback is active, it continues from the current position in the loop. Playback and WAV export use the same audio buffer.
 - Tempo, swing, mixer, and key-sync changes also affect locked lanes. Shortening the loop removes events outside its new range and trims its end.
 - Pitch combines key-sync correction, `octave` shifts of ±1 octave, and `PITCH ENV` changes at the start of each slice. Pitch changes also affect playback speed. Independent time-stretching is not implemented.
 - Project saving, stem export, video, and cloud features are not implemented. Reloading or closing the page clears sources and edits, so export any loops you want to keep as WAV files.
@@ -71,6 +71,7 @@ For imported sources, key information is prioritized as **manual override → fi
 ## Project structure and verification
 
 - `js/generator.js`: Seeded event generation, including roles, the A → A′ → B → A form, note-boundary cuts, rests, and lane locks.
+- `js/phrase-edit.js`: Edits to a finished phrase: moving, resizing, adding, and removing cuts, and swapping the piece a cut plays.
 - `js/fm-synth.js`: Seeded major-scale phrases and sine-wave FM synthesis.
 - `js/audio-engine.js`: Web Audio, synthesized demos, file decoding, rendering with `OfflineAudioContext`, and WAV encoding.
 - `js/playback-plan.js`: Independent voice limits for drum and other sources while preserving the original arrangement. Overlap detection includes swing and is shared by waveform display and audio rendering.
